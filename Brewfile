@@ -36,6 +36,14 @@ brew "eza"
 brew "zoxide"
 
 # ---------------------------------------------------------------------------
+# Fonts (Homebrew font casks)
+# Prefer 0xProto 2.502 — https://github.com/0xType/0xProto/releases/tag/2.502
+# setup.sh installs these via lib/fonts.sh (not brew bundle) so a font download
+# failure does not abort the rest of bootstrap. Manual: brew bundle --file=Brewfile
+# ---------------------------------------------------------------------------
+cask "font-0xproto"
+
+# ---------------------------------------------------------------------------
 # GUI apps (Homebrew casks)
 # ---------------------------------------------------------------------------
 cask "ghostty"

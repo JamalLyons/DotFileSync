@@ -46,9 +46,22 @@ ensure_brew_pkg() {
   brew install "$pkg"
 }
 
+# Font casks are listed in the Brewfile for inventory / manual `brew bundle`,
+# but setup installs them via lib/fonts.sh (graceful failure, --skip-fonts).
+_brewfile_for_bundle() {
+  local brewfile="$1"
+  local filtered
+  filtered="$(mktemp)"
+  grep -v -E '^[[:space:]]*cask[[:space:]]+"font-' "$brewfile" >"$filtered" || true
+  # Only the path on stdout — callers capture this via command substitution.
+  printf '%s\n' "$filtered"
+}
+
 run_brew_bundle() {
   local brewfile="$1"
-  local -a args=(bundle --file="$brewfile" --no-lock)
+  local effective
+  effective="$(_brewfile_for_bundle "$brewfile")"
+  local -a args=(bundle --file="$effective" --no-lock)
 
   if [[ "${SKIP_CASKS:-0}" == "1" ]]; then
     args+=(--brews --taps)
@@ -56,13 +69,20 @@ run_brew_bundle() {
 
   if [[ "${DRY_RUN:-0}" == "1" ]]; then
     info "[dry-run] Would run: brew ${args[*]}"
-    brew bundle check --file="$brewfile" --no-upgrade 2>/dev/null || true
+    brew bundle check --file="$effective" --no-upgrade 2>/dev/null || true
+    rm -f "$effective"
     return 0
   fi
 
   info "Installing packages from Brewfile..."
-  brew "${args[@]}"
-  success "Brewfile applied"
+  if brew "${args[@]}"; then
+    rm -f "$effective"
+    success "Brewfile applied"
+  else
+    local status=$?
+    rm -f "$effective"
+    return "$status"
+  fi
 }
 
 ensure_rustup() {

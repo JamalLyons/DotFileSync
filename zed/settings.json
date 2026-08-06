@@ -1,0 +1,98 @@
+// Zed settings
+//
+// For information on how to configure Zed, see the Zed
+// documentation: https://zed.dev/docs/configuring-zed
+//
+// To see all of Zed's default settings without changing your
+// custom settings, run `zed: open default settings` from the
+// command palette (cmd-shift-p / ctrl-shift-p)
+{
+  "project_panel": {
+    "dock": "left"
+  },
+  "outline_panel": {
+    "dock": "left"
+  },
+  "collaboration_panel": {
+    "dock": "left"
+  },
+  "git_panel": {
+    "dock": "left"
+  },
+  "lsp": {
+    "vtsls": {
+      "settings": {
+        "typescript": {
+          "updateImportsOnFileMove": {
+            "enabled": "always"
+          }
+        },
+        "javascript": {
+          "updateImportsOnFileMove": {
+            "enabled": "always"
+          }
+        }
+      },
+      "enable_lsp_tasks": true
+    }
+  },
+  "helix_mode": false,
+  "show_wrap_guides": true,
+  "cursor_blink": true,
+  "ui_font_weight": 400.0,
+  "auto_update": true,
+  "restore_on_startup": "last_session",
+  "session": {
+    "restore_unsaved_buffers": true
+  },
+  "redact_private_values": false,
+  "use_system_prompts": true,
+  "use_system_path_prompts": true,
+  "agent": {
+    "show_turn_stats": true,
+    "dock": "right",
+    "play_sound_when_agent_done": "when_hidden",
+    "default_profile": "write",
+    "default_model": {
+      "enable_thinking": true,
+      "provider": "ollama",
+      "model": "ornith:latest"
+    },
+    "model_parameters": []
+  },
+  "calls": {
+    "mute_on_join": true
+  },
+  "disable_ai": true,
+  "confirm_quit": true,
+  "icon_theme": {
+    "mode": "light",
+    "light": "Zed (Default)",
+    "dark": "Zed (Default)"
+  },
+  "telemetry": {
+    "diagnostics": false,
+    "metrics": false
+  },
+  "ui_font_family": "0xProto",
+  "buffer_font_family": "MesloLGS NF",
+  "ui_font_size": 16.0,
+  "buffer_font_size": 14.0,
+  "buffer_line_height": "standard",
+  "theme": {
+    "mode": "dark",
+    "light": "One Light",
+    "dark": "Fleet Dark"
+  },
+  "soft_wrap": "editor_width",
+  "vim_mode": false,
+  "diagnostics": {
+    "inline": {
+      "enabled": true
+    }
+  },
+  "code_actions_on_format": {
+    "source.organizeImports.biome": true,
+    "source.fixAll.biome": true
+  }
+}
