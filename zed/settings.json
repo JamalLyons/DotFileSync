@@ -52,11 +52,11 @@
     "show_turn_stats": true,
     "dock": "right",
     "play_sound_when_agent_done": "when_hidden",
-    "default_profile": "write",
+    "default_profile": "ask",
     "default_model": {
         "enable_thinking": false,
         "provider": "lmstudio",
-        "model": "qwen/qwen3-1.7b"
+        "model": "prism-ml/bonsai-27b"
     },
     "model_parameters": []
   },
@@ -65,7 +65,7 @@
     "provider": "open_ai_compatible_api",
     "open_ai_compatible_api": {
       "api_url": "http://127.0.0.1:1234/v1/completions",
-      "model": "qwen/qwen3-1.7b",
+      "model": "qwen2.5-coder-1.5b",
       "prompt_format": "qwen",
       "max_output_tokens": 512
     }
