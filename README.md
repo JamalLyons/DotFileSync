@@ -19,6 +19,7 @@ bash ./setup.sh --skip-shell    # keep your current login shell
 bash ./setup.sh --skip-xcode    # skip latest Xcode download/install
 bash ./setup.sh --skip-fonts    # skip 0xProto font cask
 bash ./setup.sh --skip-zed      # skip Zed settings sync
+bash ./setup.sh --skip-models   # skip LM Studio model downloads
 ```
 
 ## What it does
@@ -31,7 +32,8 @@ bash ./setup.sh --skip-zed      # skip Zed settings sync
 6. Syncs checked-in [`zed/settings.json`](zed/settings.json) into `~/.config/zed/settings.json` (prompts before overwrite if a different file already exists)
 7. Installs **Node.js LTS** via [fnm](https://github.com/Schniz/fnm) and enables **pnpm** via Corepack
 8. Installs the **latest Xcode** via [xcodes](https://github.com/XcodesOrg/xcodes) (Apple ID may be required; large download)
-9. Optionally sets Fish as your login shell
+9. Downloads preferred local models via **LM Studio CLI** (`lms get`)
+10. Optionally sets Fish as your login shell
 
 ## Layout
 
@@ -46,7 +48,8 @@ my-shell/
 │   ├── fish.sh
 │   ├── node.sh
 │   ├── xcode.sh
-│   └── zed.sh
+│   ├── zed.sh
+│   └── models.sh
 ├── fish/
 │   ├── config.fish
 │   ├── fish_plugins
@@ -78,7 +81,7 @@ from the documented empty template [`fish/conf.d/local.fish`](fish/conf.d/local.
 
 Included today (matched to `/Applications` where a cask exists):
 
-- Ghostty, Zed, Raycast, Ollama, Rectangle, JetBrains Toolbox
+- Ghostty, Zed, Raycast, LLM-Studio, Rectangle, JetBrains Toolbox
 - Discord, Lark, Docker Desktop, Brave, Chrome, Spotify, OBS
 - GitHub Desktop, Cursor, Claude, DBeaver, Inkscape, MEGAsync
 - Steam, Audacity, Cloudflare WARP, eqMac, pgAdmin 4

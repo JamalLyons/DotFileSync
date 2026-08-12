@@ -29,6 +29,8 @@ source "${REPO_ROOT}/lib/xcode.sh"
 source "${REPO_ROOT}/lib/fonts.sh"
 # shellcheck source=lib/zed.sh
 source "${REPO_ROOT}/lib/zed.sh"
+# shellcheck source=lib/models.sh
+source "${REPO_ROOT}/lib/models.sh"
 
 DRY_RUN=0
 SKIP_CASKS=0
@@ -36,6 +38,7 @@ SKIP_SHELL=0
 SKIP_XCODE=0
 SKIP_FONTS=0
 SKIP_ZED=0
+SKIP_MODELS=0
 
 usage() {
   cat <<'EOF'
@@ -48,6 +51,7 @@ Options:
   --skip-xcode    Skip latest Xcode install via xcodes
   --skip-fonts    Skip 0xProto (and other font cask) installs
   --skip-zed      Skip syncing Zed settings from zed/
+  --skip-models   Skip LM Studio model downloads
   -h, --help      Show this help
 EOF
 }
@@ -61,6 +65,7 @@ parse_args() {
       --skip-xcode) SKIP_XCODE=1 ;;
       --skip-fonts) SKIP_FONTS=1 ;;
       --skip-zed) SKIP_ZED=1 ;;
+      --skip-models) SKIP_MODELS=1 ;;
       -h | --help)
         usage
         exit 0
@@ -93,6 +98,7 @@ print_summary() {
   echo "  • 0xProto fonts via Homebrew (unless --skip-fonts)"
   echo "  • Fish config templates synced to ~/.config/fish"
   echo "  • Zed settings synced to ~/.config/zed (unless --skip-zed)"
+  echo "  • LM Studio models (unless --skip-models)"
   echo ""
   info "Useful commands:"
   echo "  helpme           Show custom Fish commands"
@@ -139,6 +145,8 @@ main() {
   setup_xcode
 
   set_fish_as_default_shell
+
+  install_models
 
   print_summary
 }

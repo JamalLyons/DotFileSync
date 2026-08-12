@@ -54,16 +54,26 @@
     "play_sound_when_agent_done": "when_hidden",
     "default_profile": "write",
     "default_model": {
-      "enable_thinking": true,
-      "provider": "ollama",
-      "model": "ornith:latest"
+        "enable_thinking": false,
+        "provider": "lmstudio",
+        "model": "qwen/qwen3-1.7b"
     },
     "model_parameters": []
+  },
+  "edit_predictions": {
+    "allow_data_collection": "no",
+    "provider": "open_ai_compatible_api",
+    "open_ai_compatible_api": {
+      "api_url": "http://127.0.0.1:1234/v1/completions",
+      "model": "qwen/qwen3-1.7b",
+      "prompt_format": "qwen",
+      "max_output_tokens": 512
+    }
   },
   "calls": {
     "mute_on_join": true
   },
-  "disable_ai": true,
+  "disable_ai": false,
   "confirm_quit": true,
   "icon_theme": {
     "mode": "light",

@@ -70,3 +70,4 @@ cask "epic-games"
 cask "minecraft"
 cask "roblox"
 cask "melonds" # deprecated upstream; remove after brew disables it
+cask "lm-studio"
