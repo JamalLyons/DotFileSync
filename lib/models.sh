@@ -4,8 +4,7 @@
 install_models() {
   local models=(
     "prism-ml/bonsai-27b"
-    "qwen/qwen3-1.7b"
-    "qwen/qwen3-4b-2507"
+    "qwen2.5-coder-1.5b"
   )
 
   local lms_bin="lms"
