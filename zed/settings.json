@@ -7,7 +7,53 @@
 // custom settings, run `zed: open default settings` from the
 // command palette (cmd-shift-p / ctrl-shift-p)
 {
+  "git": {
+    "disable_git": false
+  },
+  "terminal": {
+    "toolbar": {
+      "breadcrumbs": false
+    },
+    "shell": null,
+    "dock": "bottom"
+  },
+  "title_bar": {
+    "show_branch_status_icon": true
+  },
+  "status_bar": {
+    "show_active_file": false,
+    "line_endings_button": false
+  },
+  "close_on_file_delete": true,
+  "use_smartcase_search": true,
+  "completions": {
+    "lsp_fetch_timeout_ms": 120
+  },
+  "accessible_mode": false,
+  "search": {
+    "case_sensitive": true
+  },
+  "instrumentation": {
+    "performance_profiler": {
+      "enabled": true
+    }
+  },
+  "edit_predictions": {
+    "codestral": {
+      "api_url": "https://codestral.mistral.ai"
+    },
+    "allow_data_collection": "no"
+  },
+  "show_edit_predictions": true,
   "project_panel": {
+    "sort_mode": "files_first",
+    "hide_hidden": false,
+    "hide_root": true,
+    "diagnostic_badges": true,
+    "bold_folder_labels": true,
+    "file_icons": true,
+    "hide_gitignore": false,
+    "default_width": 240.0,
     "dock": "left"
   },
   "outline_panel": {
@@ -17,6 +63,8 @@
     "dock": "left"
   },
   "git_panel": {
+    "file_icons": false,
+    "tree_view": false,
     "dock": "left"
   },
   "lsp": {
@@ -41,7 +89,7 @@
   "cursor_blink": true,
   "ui_font_weight": 400.0,
   "auto_update": true,
-  "restore_on_startup": "last_session",
+  "restore_on_startup": "launchpad",
   "session": {
     "restore_unsaved_buffers": true
   },
@@ -49,26 +97,26 @@
   "use_system_prompts": true,
   "use_system_path_prompts": true,
   "agent": {
+    "sidebar_side": "right",
+    "favorite_models": [
+      {
+        "provider": "zed.dev",
+        "model": "gpt-5.6-sol",
+        "enable_thinking": true,
+        "effort": "medium"
+      }
+    ],
     "show_turn_stats": true,
     "dock": "right",
     "play_sound_when_agent_done": "when_hidden",
     "default_profile": "ask",
     "default_model": {
-        "enable_thinking": false,
-        "provider": "lmstudio",
-        "model": "prism-ml/bonsai-27b"
+        "effort": "medium",
+        "enable_thinking": true,
+        "provider": "zed.dev",
+        "model": "gpt-5.6-sol"
     },
     "model_parameters": []
-  },
-  "edit_predictions": {
-    "allow_data_collection": "no",
-    "provider": "open_ai_compatible_api",
-    "open_ai_compatible_api": {
-      "api_url": "http://127.0.0.1:1234/v1/completions",
-      "model": "qwen2.5-coder-1.5b",
-      "prompt_format": "qwen",
-      "max_output_tokens": 512
-    }
   },
   "calls": {
     "mute_on_join": true
@@ -81,17 +129,18 @@
     "dark": "Zed (Default)"
   },
   "telemetry": {
-    "diagnostics": false,
+    "anthropic_retention": true,
+    "diagnostics": true,
     "metrics": false
   },
   "ui_font_family": "0xProto",
-  "buffer_font_family": "MesloLGS NF",
+  "buffer_font_family": "0xProto",
   "ui_font_size": 16.0,
   "buffer_font_size": 14.0,
   "buffer_line_height": "standard",
   "theme": {
-    "mode": "dark",
-    "light": "One Light",
+    "mode": "system",
+    "light": "Fleet Dark",
     "dark": "Fleet Dark"
   },
   "soft_wrap": "editor_width",
