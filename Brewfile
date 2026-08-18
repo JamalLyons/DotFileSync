@@ -34,6 +34,7 @@ brew "fd"
 brew "fzf"
 brew "eza"
 brew "zoxide"
+brew "imagemagick"
 
 # ---------------------------------------------------------------------------
 # Fonts (Homebrew font casks)
