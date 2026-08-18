@@ -34,6 +34,11 @@ brew "fd"
 brew "fzf"
 brew "eza"
 brew "zoxide"
+brew "ffmpeg"
+brew "yt-dlp"
+brew "imagemagick"
+brew "cargo-binstall"
+brew "biome"
 
 # ---------------------------------------------------------------------------
 # Fonts (Homebrew font casks)
@@ -69,5 +74,7 @@ cask "juicy"
 cask "epic-games"
 cask "minecraft"
 cask "roblox"
-cask "melonds" # deprecated upstream; remove after brew disables it
+cask "melonds"
 cask "lm-studio"
+cask "dbeaver-community"
+cask "windows-app"
