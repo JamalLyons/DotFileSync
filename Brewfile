@@ -39,7 +39,6 @@ brew "yt-dlp"
 brew "imagemagick"
 brew "cargo-binstall"
 brew "biome"
-brew "postgresql@17"
 
 # ---------------------------------------------------------------------------
 # Fonts (Homebrew font casks)
@@ -57,7 +56,6 @@ cask "zed"
 cask "raycast"
 cask "rectangle"
 cask "jetbrains-toolbox"
-cask "intellij-idea"
 cask "discord"
 cask "lark"
 cask "brave-browser"
@@ -73,25 +71,8 @@ cask "audacity"
 cask "eqmac"
 cask "antigravity"
 cask "juicy"
-cask "epic-games"
 cask "minecraft"
 cask "roblox"
 cask "melonds"
 cask "lm-studio"
-cask "lm-studio-bionic"
-cask "docker"
 cask "dbeaver-community"
-cask "pgadmin4"
-cask "cloudflare-warp"
-cask "windows-app"
-cask "ollama"
-cask "inkscape"
-
-# ---------------------------------------------------------------------------
-# Mac App Store (optional via: brew install mas)
-# ---------------------------------------------------------------------------
-# mas "Keynote", id: 409183694
-# mas "Numbers", id: 409203825
-# mas "Pages", id: 409201541
-# mas "Apple Developer", id: 640199958
-# mas "Xcode", id: 497799835
