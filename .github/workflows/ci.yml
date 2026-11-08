@@ -11,8 +11,8 @@ env:
 
 jobs:
   format:
-    name: Code Formatting
-    runs-on: ubuntu-latest
+    name: Code Formatting (macOS)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -23,8 +23,8 @@ jobs:
         run: cargo fmt --all -- --check
 
   clippy:
-    name: Clippy Lint
-    runs-on: ubuntu-latest
+    name: Clippy Lint (macOS)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -35,8 +35,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   msrv:
-    name: MSRV Verification (Rust 1.85)
-    runs-on: ubuntu-latest
+    name: MSRV Verification (Rust 1.85 on macOS)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install MSRV Rust toolchain (1.85.0)
@@ -47,11 +47,8 @@ jobs:
         run: cargo test --workspace --locked
 
   test:
-    name: Fixture Tests (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+    name: Tests (macOS)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -81,3 +78,23 @@ jobs:
           cargo run -p dotfilesync-cli -- status --manifest fixtures/sample_manifest.toml --home "$RUNNER_TEMP/isolated_home" --json > "$RUNNER_TEMP/status_out.json"
           grep '"homebrew_available": true' "$RUNNER_TEMP/status_out.json"
           grep '"packages_unknown": 0' "$RUNNER_TEMP/status_out.json"
+
+  verify-unsupported-platforms:
+    name: Verify Unsupported Platforms Fail (Linux & Windows)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Verify build fails on unsupported platform
+        shell: bash
+        run: |
+          if cargo check --workspace; then
+            echo "Expected cargo check to fail on unsupported platform ${{ matrix.os }}, but it succeeded!"
+            exit 1
+          else
+            echo "cargo check correctly failed on unsupported platform ${{ matrix.os }}."
+          fi

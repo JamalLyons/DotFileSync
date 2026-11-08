@@ -1,3 +1,6 @@
+#[cfg(not(target_os = "macos"))]
+compile_error!("dotfilesync is designed exclusively for macOS in Milestone 1; building on Linux or Windows is unsupported.");
+
 pub mod brew;
 pub mod comparison;
 pub mod config;

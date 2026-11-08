@@ -179,7 +179,7 @@ Apache-2.0
 
 ### Toolchain and Building
 
-Requires **Rust 1.85+** (MSRV 1.85).
+Requires **macOS** and **Rust 1.85+** (MSRV 1.85). Dotfilesync Milestone 1 is built exclusively for macOS; building on Linux or Windows is unsupported and prevented at compile time.
 
 ```bash
 # Build the workspace

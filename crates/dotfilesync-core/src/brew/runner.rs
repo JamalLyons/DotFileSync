@@ -166,10 +166,7 @@ impl CommandRunner for RealCommandRunner {
         let program_display = program.display().to_string();
 
         let kill_all = |child: &mut std::process::Child| {
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-            }
+            kill_process_tree(pid);
             let _ = child.kill();
         };
 
@@ -300,6 +297,38 @@ impl CommandRunner for RealCommandRunner {
                 })
             }
         }
+    }
+}
+
+/// Recursively terminates a process and any descendants, including descendants
+/// that detached into their own process groups or sessions (via setsid/setpgid).
+fn kill_process_tree(pid: u32) {
+    // 1. Discover descendants via pgrep -P WHILE parent is still alive
+    // (once parent terminates, children are immediately re-parented to PID 1 by the kernel).
+    if let Ok(output) = Command::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .output()
+    {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout);
+            for line in s.lines() {
+                if let Ok(child_pid) = line.trim().parse::<i32>() {
+                    kill_process_tree(child_pid as u32);
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(-child_pid, libc::SIGKILL);
+                        libc::kill(child_pid, libc::SIGKILL);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Terminate the parent process group and process
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+        libc::kill(pid as libc::pid_t, libc::SIGKILL);
     }
 }
 

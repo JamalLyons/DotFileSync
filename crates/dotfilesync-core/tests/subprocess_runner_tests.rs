@@ -152,6 +152,38 @@ fn test_real_runner_background_descendant_holding_pipes_open() {
 
 #[cfg(unix)]
 #[test]
+fn test_real_runner_detached_session_descendant_is_terminated() {
+    // Test case where a descendant detaches itself into a new session via setsid
+    let timeout = Duration::from_millis(400);
+    let runner = RealCommandRunner::new(timeout);
+    let start = Instant::now();
+
+    // Spawns a python script that launches a detached grandchild with setsid() and sleeps 3s
+    let code = r#"
+import subprocess, sys, time
+p = subprocess.Popen([sys.executable, "-c", "import os, time; os.setsid(); time.sleep(3)"])
+p.wait()
+"#;
+    let res = runner.run("python3", &["-c", code]);
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed >= Duration::from_millis(350),
+        "Elapsed time too short: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(1800),
+        "Full call must terminate detached descendants at deadline: took {elapsed:?}"
+    );
+
+    match res {
+        Err(RunnerError::Timeout { .. }) => {}
+        other => panic!("Expected Timeout error, got: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn test_real_runner_non_utf8_executable_path() {
     use std::ffi::OsStr;
     use std::fs;
