@@ -108,9 +108,10 @@ fn test_fixture_status_missing_packages_and_changed_config() {
     assert_eq!(report.summary.packages_matching, 2); // git, ghostty
     assert_eq!(report.summary.packages_missing, 3); // ripgrep, missing-formula-tool, missing-gui-app
     assert_eq!(report.summary.packages_unmanaged, 1); // unmanaged-cli
-    assert_eq!(report.summary.configs_matching, 2); // sample_matching.conf, local.conf (override)
-    assert_eq!(report.summary.configs_changed, 1); // sample_config.fish
-    assert_eq!(report.summary.configs_missing, 1); // sample_missing.conf
+    assert_eq!(report.summary.configs_matching, 1); // sample_matching.conf (verified matching)
+    assert_eq!(report.summary.configs_changed, 1); // sample_config.fish (drift)
+    assert_eq!(report.summary.configs_missing, 1); // sample_missing.conf (missing)
+    assert_eq!(report.summary.configs_skipped, 1); // local.conf (preserved machine-local override)
 
     // Verify missing packages
     let missing_formulae: Vec<&str> = report
@@ -143,8 +144,20 @@ fn test_fixture_status_missing_packages_and_changed_config() {
     assert!(changed_config.target.ends_with("sample_config.fish"));
     assert_ne!(changed_config.source_hash, changed_config.target_hash);
 
-    // Save fixture JSON for inspection and documentation
+    // Verify machine-local override is skipped (not matching) and has no content fingerprint
+    let local_override = report
+        .config_differences
+        .iter()
+        .find(|c| c.classification == DifferenceClassification::Skipped)
+        .expect("Should find skipped machine-local override");
+    assert!(local_override.target.ends_with("local.conf"));
+    assert!(local_override.source_hash.is_none());
+    assert!(local_override.target_hash.is_none());
+
+    // Write generated JSON to a temporary file, verifying serialization without mutating repo fixtures
+    let out_dir = tempdir().unwrap();
+    let out_path = out_dir.path().join("status_test_output.json");
     let json_output = serde_json::to_string_pretty(&report).unwrap();
-    let out_path = manifest_dir.join("../../fixtures/example_status_output.json");
     fs::write(&out_path, &json_output).unwrap();
+    assert!(out_path.exists());
 }

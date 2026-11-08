@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, "feature/**" ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  format:
+    name: Code Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run strict clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: Fixture Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain (MSRV 1.85+)
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run fixture-isolated tests
+        run: cargo test --workspace --locked
+
+  real-homebrew-integration:
+    name: Real macOS Homebrew Integration Check
+    runs-on: macos-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run read-only scan against host Homebrew
+        run: cargo run -p dotfilesync-cli -- scan --manifest dotfilesync.toml --json
+      - name: Run read-only status against host Homebrew
+        run: cargo run -p dotfilesync-cli -- status --manifest dotfilesync.toml --json

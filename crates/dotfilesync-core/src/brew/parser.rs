@@ -15,69 +15,54 @@ pub fn parse_brewfile(content: &str) -> BrewfileParseResult {
             continue;
         }
 
-        // Check for dynamic Ruby constructs
-        if is_dynamic_ruby(trimmed) {
-            unsupported_constructs.push(UnsupportedConstruct {
-                line_number,
-                raw_line: line.to_string(),
-                construct_type: "dynamic_ruby".to_string(),
-                reason: "Dynamic Ruby statement, control flow, or method invocation cannot be evaluated statically".to_string(),
-            });
-            continue;
-        }
-
-        // Check for brew declaration
+        // 1. Check for brew declaration
         if let Some(rest) = trimmed.strip_prefix("brew ") {
-            match extract_package_entry(rest) {
+            match parse_package_declaration(rest.trim()) {
                 Ok((name, has_options)) => {
                     formulae.push(name);
                     if has_options {
-                        diagnostics.push(
-                            Diagnostic::warning(format!(
-                                "Line {line_number}: brew options on '{rest}' are not tracked by dotfilesync manifest"
-                            ))
-                        );
+                        diagnostics.push(Diagnostic::warning(format!(
+                            "Line {line_number}: brew options on '{trimmed}' are not tracked by dotfilesync manifest"
+                        )));
                     }
                 }
-                Err(err) => {
+                Err((construct_type, reason)) => {
                     unsupported_constructs.push(UnsupportedConstruct {
                         line_number,
                         raw_line: line.to_string(),
-                        construct_type: "malformed_brew".to_string(),
-                        reason: err,
+                        construct_type,
+                        reason,
                     });
                 }
             }
             continue;
         }
 
-        // Check for cask declaration
+        // 2. Check for cask declaration
         if let Some(rest) = trimmed.strip_prefix("cask ") {
-            match extract_package_entry(rest) {
+            match parse_package_declaration(rest.trim()) {
                 Ok((name, has_options)) => {
                     casks.push(name);
                     if has_options {
-                        diagnostics.push(
-                            Diagnostic::warning(format!(
-                                "Line {line_number}: cask options on '{rest}' are not tracked by dotfilesync manifest"
-                            ))
-                        );
+                        diagnostics.push(Diagnostic::warning(format!(
+                            "Line {line_number}: cask options on '{trimmed}' are not tracked by dotfilesync manifest"
+                        )));
                     }
                 }
-                Err(err) => {
+                Err((construct_type, reason)) => {
                     unsupported_constructs.push(UnsupportedConstruct {
                         line_number,
                         raw_line: line.to_string(),
-                        construct_type: "malformed_cask".to_string(),
-                        reason: err,
+                        construct_type,
+                        reason,
                     });
                 }
             }
             continue;
         }
 
-        // Check for tap declaration
-        if trimmed.starts_with("tap ") {
+        // 3. Check for tap declaration
+        if trimmed.starts_with("tap ") || trimmed == "tap" {
             unsupported_constructs.push(UnsupportedConstruct {
                 line_number,
                 raw_line: line.to_string(),
@@ -87,8 +72,8 @@ pub fn parse_brewfile(content: &str) -> BrewfileParseResult {
             continue;
         }
 
-        // Check for mas declaration
-        if trimmed.starts_with("mas ") {
+        // 4. Check for mas declaration
+        if trimmed.starts_with("mas ") || trimmed == "mas" {
             unsupported_constructs.push(UnsupportedConstruct {
                 line_number,
                 raw_line: line.to_string(),
@@ -99,13 +84,25 @@ pub fn parse_brewfile(content: &str) -> BrewfileParseResult {
             continue;
         }
 
-        // Check for whalebrew / vscode
+        // 5. Check for whalebrew / vscode bundle extensions
         if trimmed.starts_with("whalebrew ") || trimmed.starts_with("vscode ") {
             unsupported_constructs.push(UnsupportedConstruct {
                 line_number,
                 raw_line: line.to_string(),
                 construct_type: "bundle_extension".to_string(),
                 reason: "Brew bundle extensions (whalebrew, vscode) are not supported".to_string(),
+            });
+            continue;
+        }
+
+        // 6. Check for dynamic Ruby constructs (outside quoted declarations and comments)
+        if is_dynamic_ruby_line(trimmed) {
+            unsupported_constructs.push(UnsupportedConstruct {
+                line_number,
+                raw_line: line.to_string(),
+                construct_type: "dynamic_ruby".to_string(),
+                reason: "Dynamic Ruby statement or control flow cannot be evaluated statically"
+                    .to_string(),
             });
             continue;
         }
@@ -147,52 +144,115 @@ pub fn parse_brewfile(content: &str) -> BrewfileParseResult {
     }
 }
 
-fn is_dynamic_ruby(line: &str) -> bool {
-    let tokens = [
-        "if ", "unless ", "case ", "when ", "def ", "class ", "module ", "system ", "Kernel.",
-        "ENV[", "ENV.", "#{", "do |", ".each", "lambda", "proc", "rescue ", "ensure", "end",
-    ];
-    for token in tokens {
-        if line.starts_with(token) || line.contains(token) {
-            return true;
-        }
-    }
-    false
-}
-
-/// Extracts a quoted string from the beginning of the string, and detects if options follow.
-/// e.g. `"fish"` or `'git', args: ['--HEAD']`
-fn extract_package_entry(input: &str) -> Result<(String, bool), String> {
+/// Parses the package expression following `brew ` or `cask `.
+/// Expects `"name"` or `'name'`, optionally followed by `, args: [...]` or a comment `# ...`.
+/// Rejects unsupported trailing expressions like `+ extra` or string interpolations.
+fn parse_package_declaration(input: &str) -> Result<(String, bool), (String, String)> {
     let trimmed = input.trim();
     let quote_char = if trimmed.starts_with('"') {
         '"'
     } else if trimmed.starts_with('\'') {
         '\''
     } else {
-        return Err(format!(
-            "Expected opening quote in package declaration: '{trimmed}'"
+        return Err((
+            "malformed_syntax".to_string(),
+            format!("Expected opening quote for package name: '{trimmed}'"),
         ));
     };
 
     let inner = &trimmed[1..];
-    if let Some(end_quote_idx) = inner.find(quote_char) {
-        let name = &inner[..end_quote_idx];
-        if name.trim().is_empty() {
-            return Err("Package name inside quotes is empty".to_string());
+    let end_quote_idx = inner.find(quote_char).ok_or_else(|| {
+        (
+            "malformed_syntax".to_string(),
+            format!("Unterminated quote in package declaration: '{trimmed}'"),
+        )
+    })?;
+
+    let name = &inner[..end_quote_idx];
+    if name.trim().is_empty() {
+        return Err((
+            "malformed_syntax".to_string(),
+            "Package name inside quotes is empty".to_string(),
+        ));
+    }
+
+    // Dynamic string interpolation check
+    if name.contains("#{") {
+        return Err((
+            "dynamic_ruby".to_string(),
+            "String interpolation in package name is not supported".to_string(),
+        ));
+    }
+
+    let remainder = inner[end_quote_idx + 1..].trim();
+
+    // Remainder can be empty, a comment (`# ...`), or options (`,...`)
+    if remainder.is_empty() || remainder.starts_with('#') {
+        Ok((name.to_string(), false))
+    } else if let Some(options_part) = remainder.strip_prefix(',') {
+        let opt_trimmed = options_part.trim();
+        if opt_trimmed.contains("#{") {
+            return Err((
+                "dynamic_ruby".to_string(),
+                "Dynamic Ruby interpolation inside options is not supported".to_string(),
+            ));
         }
-        let remainder = inner[end_quote_idx + 1..].trim();
-        // If remainder contains more than a comment (e.g., `, args: [...]`), flag options
-        let has_options = if remainder.is_empty() || remainder.starts_with('#') {
-            false
-        } else {
-            remainder.starts_with(',')
-        };
-        Ok((name.to_string(), has_options))
+        Ok((name.to_string(), true))
     } else {
-        Err(format!(
-            "Unterminated quote in package declaration: '{trimmed}'"
+        // Any other trailing characters (e.g. `+ extra`, `<< something`) are unsupported Ruby expressions
+        Err((
+            "unsupported_expression".to_string(),
+            format!("Unsupported trailing expression following package declaration: '{remainder}'"),
         ))
     }
+}
+
+/// Determines whether a line (with comments stripped) is a dynamic Ruby keyword or control statement.
+fn is_dynamic_ruby_line(line: &str) -> bool {
+    let code = strip_trailing_comment(line).trim();
+    if code.is_empty() {
+        return false;
+    }
+
+    if code.contains("#{") {
+        return true;
+    }
+
+    let ruby_keywords = [
+        "if", "unless", "case", "when", "def", "class", "module", "system", "Kernel.", "ENV[",
+        "ENV.", "do", "end", "while", "until", "for", "begin", "rescue", "ensure", "lambda",
+        "proc",
+    ];
+
+    for kw in ruby_keywords {
+        if code == kw
+            || code.starts_with(&format!("{kw} "))
+            || code.starts_with(&format!("{kw}("))
+            || code.starts_with(&format!("{kw}:"))
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn strip_trailing_comment(line: &str) -> &str {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut prev_char = '\0';
+
+    for (idx, ch) in line.char_indices() {
+        match ch {
+            '\'' if !in_double && prev_char != '\\' => in_single = !in_single,
+            '"' if !in_single && prev_char != '\\' => in_double = !in_double,
+            '#' if !in_single && !in_double => return &line[..idx],
+            _ => {}
+        }
+        prev_char = ch;
+    }
+
+    line
 }
 
 #[cfg(test)]
@@ -215,6 +275,34 @@ cask "zed"
         assert_eq!(res.formulae, vec!["fish", "gh", "git"]);
         assert_eq!(res.casks, vec!["ghostty", "zed"]);
         assert!(res.unsupported_constructs.is_empty());
+    }
+
+    #[test]
+    fn test_ordinary_names_with_substrings_do_not_falsely_trigger_dynamic_ruby() {
+        // "calendar" contains "end"
+        // "blender" contains "end"
+        // comment contains "system utility"
+        let input = r#"
+brew "calendar"
+brew "blender"
+cask "rectangle" # system utility
+"#;
+        let res = parse_brewfile(input);
+        assert_eq!(res.formulae, vec!["blender", "calendar"]);
+        assert_eq!(res.casks, vec!["rectangle"]);
+        assert!(res.unsupported_constructs.is_empty());
+    }
+
+    #[test]
+    fn test_unsupported_trailing_expression_is_flagged() {
+        let input = r#"brew "git" + extra"#;
+        let res = parse_brewfile(input);
+        assert!(res.formulae.is_empty());
+        assert_eq!(res.unsupported_constructs.len(), 1);
+        assert_eq!(
+            res.unsupported_constructs[0].construct_type,
+            "unsupported_expression"
+        );
     }
 
     #[test]

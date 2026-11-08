@@ -42,6 +42,7 @@ pub fn discover_homebrew(runner: &dyn CommandRunner) -> BrewDiscoveryResult {
     // Prefer `brew info --json=v2 --installed`, with fallback to `brew list --versions`
     match query_packages_json(runner, &brew_prog) {
         Ok((formulae, casks)) => {
+            result.packages_enumerated = true;
             result.formulae = formulae;
             result.casks = casks;
             return result;
@@ -50,6 +51,7 @@ pub fn discover_homebrew(runner: &dyn CommandRunner) -> BrewDiscoveryResult {
             // Attempt fallback to `brew list --versions`
             match query_packages_list(runner, &brew_prog) {
                 Ok((formulae, casks)) => {
+                    result.packages_enumerated = true;
                     result.formulae = formulae;
                     result.casks = casks;
                     result.diagnostics.push(
@@ -61,6 +63,7 @@ pub fn discover_homebrew(runner: &dyn CommandRunner) -> BrewDiscoveryResult {
                     return result;
                 }
                 Err(list_err) => {
+                    result.packages_enumerated = false;
                     result.diagnostics.push(
                         Diagnostic::error("Failed to query installed Homebrew packages")
                             .with_detail(format!(
@@ -86,49 +89,61 @@ fn query_packages_json(
     let v: Value = serde_json::from_str(&out.stdout)
         .map_err(|e| format!("Failed to parse 'brew info' JSON: {e}"))?;
 
-    let mut formulae = Vec::new();
-    if let Some(arr) = v.get("formulae").and_then(|f| f.as_array()) {
-        for item in arr {
-            if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
-                let version = item
-                    .get("installed")
-                    .and_then(|inst| inst.as_array())
-                    .and_then(|arr| arr.first())
-                    .and_then(|obj| obj.get("version"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+    let obj = v
+        .as_object()
+        .ok_or_else(|| "Root JSON response is not an object".to_string())?;
 
-                formulae.push(ObservedPackage {
-                    name: name.to_string(),
-                    kind: PackageKind::Formula,
-                    version,
-                    installed: true,
-                });
-            }
+    let formulae_arr = obj
+        .get("formulae")
+        .ok_or_else(|| "JSON response missing 'formulae' field".to_string())?
+        .as_array()
+        .ok_or_else(|| "'formulae' field is not an array".to_string())?;
+
+    let mut formulae = Vec::new();
+    for item in formulae_arr {
+        if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
+            let version = item
+                .get("installed")
+                .and_then(|inst| inst.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|obj| obj.get("version"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            formulae.push(ObservedPackage {
+                name: name.to_string(),
+                kind: PackageKind::Formula,
+                version,
+                installed: true,
+            });
         }
     }
 
+    let casks_arr = obj
+        .get("casks")
+        .ok_or_else(|| "JSON response missing 'casks' field".to_string())?
+        .as_array()
+        .ok_or_else(|| "'casks' field is not an array".to_string())?;
+
     let mut casks = Vec::new();
-    if let Some(arr) = v.get("casks").and_then(|c| c.as_array()) {
-        for item in arr {
-            let name = item
-                .get("token")
-                .or_else(|| item.get("name"))
-                .and_then(|n| n.as_str());
+    for item in casks_arr {
+        let name = item
+            .get("token")
+            .or_else(|| item.get("name"))
+            .and_then(|n| n.as_str());
 
-            if let Some(token) = name {
-                let version = item
-                    .get("version")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
+        if let Some(token) = name {
+            let version = item
+                .get("version")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
-                casks.push(ObservedPackage {
-                    name: token.to_string(),
-                    kind: PackageKind::Cask,
-                    version,
-                    installed: true,
-                });
-            }
+            casks.push(ObservedPackage {
+                name: token.to_string(),
+                kind: PackageKind::Cask,
+                version,
+                installed: true,
+            });
         }
     }
 

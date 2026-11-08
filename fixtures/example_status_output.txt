@@ -3,7 +3,7 @@
 SUMMARY:
   Homebrew:  Homebrew 4.3.0
   Packages:  2 matching, 3 missing, 1 unmanaged, 0 unknown
-  Configs:   2 matching, 1 changed (drift), 1 missing, 0 unknown
+  Configs:   1 matching, 1 changed (drift), 1 missing, 0 unknown, 1 skipped
 
 MISSING PACKAGES (3):
   ✗ [formula] missing-formula-tool
@@ -23,3 +23,7 @@ MISSING CONFIG FILES (1):
 
 UNMANAGED PACKAGES (installed on system, not declared in manifest) (1):
   • [formula] unmanaged-cli (0.5.1)
+
+SKIPPED / MACHINE-LOCAL CONFIGS (1):
+  - Target: ~/.config/sample/local.conf
+    Note:   Preserved as machine-local override (not modified)

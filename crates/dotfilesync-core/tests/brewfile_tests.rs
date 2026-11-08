@@ -19,6 +19,33 @@ cask 'zed'
 }
 
 #[test]
+fn test_ordinary_names_with_substrings_import_correctly() {
+    // "calendar" and "blender" contain "end"
+    // comment on cask contains "system utility"
+    let content = r#"
+brew "calendar"
+brew "blender"
+cask "rectangle" # system utility
+"#;
+    let res = parse_brewfile(content);
+    assert_eq!(res.formulae, vec!["blender", "calendar"]);
+    assert_eq!(res.casks, vec!["rectangle"]);
+    assert!(res.unsupported_constructs.is_empty());
+}
+
+#[test]
+fn test_unsupported_trailing_expression_is_flagged() {
+    let content = r#"brew "git" + extra"#;
+    let res = parse_brewfile(content);
+    assert!(res.formulae.is_empty());
+    assert_eq!(res.unsupported_constructs.len(), 1);
+    assert_eq!(
+        res.unsupported_constructs[0].construct_type,
+        "unsupported_expression"
+    );
+}
+
+#[test]
 fn test_brew_and_cask_with_options() {
     let content = r#"
 brew "neovim", args: ["--HEAD"]
@@ -88,11 +115,11 @@ cask "unterminated_quote
     assert_eq!(res.unsupported_constructs.len(), 2);
     assert_eq!(
         res.unsupported_constructs[0].construct_type,
-        "malformed_brew"
+        "malformed_syntax"
     );
     assert_eq!(
         res.unsupported_constructs[1].construct_type,
-        "malformed_cask"
+        "malformed_syntax"
     );
 }
 

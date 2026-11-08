@@ -12,6 +12,9 @@ pub enum ValidationError {
     #[error("Empty source path for tracked file targeting '{target}'")]
     EmptySourcePath { target: String },
 
+    #[error("Source path '{source_path}' must be a relative path within repository root")]
+    AbsoluteSourcePath { source_path: String },
+
     #[error("Empty target path for tracked file with source '{source_path}'")]
     EmptyTargetPath { source_path: String },
 
@@ -57,6 +60,10 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), Vec<ValidationError>
         if file.source.trim().is_empty() {
             errors.push(ValidationError::EmptySourcePath {
                 target: file.target.clone(),
+            });
+        } else if Path::new(&file.source).is_absolute() {
+            errors.push(ValidationError::AbsoluteSourcePath {
+                source_path: file.source.clone(),
             });
         }
 

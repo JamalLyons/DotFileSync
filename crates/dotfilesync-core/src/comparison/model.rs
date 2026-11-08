@@ -13,6 +13,7 @@ pub enum DifferenceClassification {
     Changed,
     Unmanaged,
     Unknown,
+    Skipped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,7 +22,8 @@ pub struct PackageDifference {
     pub kind: PackageKind,
     pub classification: DifferenceClassification,
     pub desired: bool,
-    pub installed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observed_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,6 +54,7 @@ pub struct StatusSummary {
     pub configs_changed: usize,
     pub configs_missing: usize,
     pub configs_unknown: usize,
+    pub configs_skipped: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

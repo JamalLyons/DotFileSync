@@ -114,11 +114,12 @@ pub fn render_status_report(report: &StatusReport) -> String {
         report.summary.packages_unknown,
     ));
     out.push_str(&format!(
-        "  Configs:   {} matching, {} changed (drift), {} missing, {} unknown\n",
+        "  Configs:   {} matching, {} changed (drift), {} missing, {} unknown, {} skipped\n",
         report.summary.configs_matching,
         report.summary.configs_changed,
         report.summary.configs_missing,
         report.summary.configs_unknown,
+        report.summary.configs_skipped,
     ));
 
     // Missing packages
@@ -215,6 +216,49 @@ pub fn render_status_report(report: &StatusReport) -> String {
                 "  ✗ Target: {}\n    Source: {}\n",
                 c.target.display(),
                 c.source.display()
+            ));
+        }
+    }
+
+    // Unknown configs (unreadable, missing repo source, symlink escaping root)
+    let unknown_configs: Vec<&ConfigDifference> = report
+        .config_differences
+        .iter()
+        .filter(|c| c.classification == DifferenceClassification::Unknown)
+        .collect();
+    if !unknown_configs.is_empty() {
+        out.push_str(&format!(
+            "\nUNKNOWN STATUS CONFIG FILES ({}):\n",
+            unknown_configs.len()
+        ));
+        for c in unknown_configs {
+            let reason = c
+                .diagnostic
+                .as_deref()
+                .unwrap_or("Status cannot be verified");
+            out.push_str(&format!(
+                "  ? Target: {}\n    Reason: {reason}\n",
+                c.target.display()
+            ));
+        }
+    }
+
+    // Skipped / machine-local configs
+    let skipped_configs: Vec<&ConfigDifference> = report
+        .config_differences
+        .iter()
+        .filter(|c| c.classification == DifferenceClassification::Skipped)
+        .collect();
+    if !skipped_configs.is_empty() {
+        out.push_str(&format!(
+            "\nSKIPPED / MACHINE-LOCAL CONFIGS ({}):\n",
+            skipped_configs.len()
+        ));
+        for c in skipped_configs {
+            let reason = c.diagnostic.as_deref().unwrap_or("Skipped");
+            out.push_str(&format!(
+                "  - Target: {}\n    Note:   {reason}\n",
+                c.target.display()
             ));
         }
     }

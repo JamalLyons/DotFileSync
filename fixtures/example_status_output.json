@@ -55,15 +55,15 @@
   ],
   "config_differences": [
     {
-      "source": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmp2KACxF/sample_local.conf",
-      "target": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmpyZYH13/.config/sample/local.conf",
-      "classification": "matching",
-      "state": "excluded",
-      "diagnostic": "Excluded by manifest rule"
+      "source": "sample_local.conf",
+      "target": "~/.config/sample/local.conf",
+      "classification": "skipped",
+      "state": "machine_local",
+      "diagnostic": "Preserved as machine-local override (not modified)"
     },
     {
-      "source": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmp2KACxF/sample_config.fish",
-      "target": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmpyZYH13/.config/sample/sample_config.fish",
+      "source": "sample_config.fish",
+      "target": "~/.config/sample/sample_config.fish",
       "classification": "changed",
       "state": "changed",
       "source_hash": "40d53c6af9b3ac2acff22a5e13b15d2b2df17d7758c83492547d57076f600092",
@@ -71,16 +71,16 @@
       "diagnostic": "Target content differs from repository source (drift detected)"
     },
     {
-      "source": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmp2KACxF/sample_matching.conf",
-      "target": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmpyZYH13/.config/sample/sample_matching.conf",
+      "source": "sample_matching.conf",
+      "target": "~/.config/sample/sample_matching.conf",
       "classification": "matching",
       "state": "matching",
       "source_hash": "7ad54488f714d52ca02e758fdc9fc3222100590ee74bcefddd9f4e152dea5b9f",
       "target_hash": "7ad54488f714d52ca02e758fdc9fc3222100590ee74bcefddd9f4e152dea5b9f"
     },
     {
-      "source": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmp2KACxF/sample_missing.conf",
-      "target": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmpyZYH13/.config/sample/sample_missing.conf",
+      "source": "sample_missing.conf",
+      "target": "~/.config/sample/sample_missing.conf",
       "classification": "missing",
       "state": "missing",
       "source_hash": "3529cf473f83c62ce0b3ace1379c548e9aa3c65bdcf6343985974d60b6ed70b8",
@@ -93,9 +93,10 @@
     "packages_missing": 3,
     "packages_unmanaged": 1,
     "packages_unknown": 0,
-    "configs_matching": 2,
+    "configs_matching": 1,
     "configs_changed": 1,
     "configs_missing": 1,
-    "configs_unknown": 0
+    "configs_unknown": 0,
+    "configs_skipped": 1
   }
 }

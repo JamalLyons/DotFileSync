@@ -4,7 +4,8 @@ use dotfilesync_core::{
     parse_brewfile, serialize_manifest, HomebrewSection, Manifest, ManifestMetadata,
     PackageManagersSection, CURRENT_SCHEMA_VERSION,
 };
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::PathBuf;
 
 use crate::output::{human, json};
@@ -15,7 +16,7 @@ pub struct ImportArgs {
     #[arg(short, long)]
     pub brewfile: PathBuf,
 
-    /// Optional destination path to write generated dotfilesync.toml manifest skeleton
+    /// Optional destination path to write a new dotfilesync.toml manifest skeleton (refuses to overwrite existing files)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
@@ -52,9 +53,30 @@ pub fn execute(args: ImportArgs) -> Result<()> {
         };
 
         let toml_str = serialize_manifest(&manifest)?;
-        fs::write(output_path, toml_str).with_context(|| {
+
+        // Atomic create_new: refuses to replace an existing file, leaving its bytes completely untouched.
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(output_path)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    anyhow::anyhow!(
+                        "Output manifest file '{}' already exists; refusing to overwrite to preserve existing configuration and exclusions.",
+                        output_path.display()
+                    )
+                } else {
+                    anyhow::anyhow!(
+                        "Failed to create new output file '{}': {}",
+                        output_path.display(),
+                        e
+                    )
+                }
+            })?;
+
+        file.write_all(toml_str.as_bytes()).with_context(|| {
             format!(
-                "Failed to write manifest skeleton to '{}'",
+                "Failed to write manifest contents to '{}'",
                 output_path.display()
             )
         })?;

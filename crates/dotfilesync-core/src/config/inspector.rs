@@ -62,34 +62,57 @@ impl<'a> ConfigInspector<'a> {
 
         if is_override {
             let target_exists = target_path.exists();
-            let target_hash = if target_exists {
-                compute_sha256(&target_path).ok()
-            } else {
-                None
-            };
-            let target_size = target_path.metadata().map(|m| m.len()).ok();
 
             return ObservedConfigFile {
                 source_path,
                 target_path,
-                state: ConfigFileState::MachineLocal,
+                state: if target_exists {
+                    ConfigFileState::MachineLocal
+                } else {
+                    ConfigFileState::Missing
+                },
                 source_hash: None,
-                target_hash,
-                target_size,
+                target_hash: None,
+                target_size: None,
                 is_symlink: false,
                 symlink_target: None,
                 diagnostic: Some(
                     if target_exists {
-                        "Machine-local override present (never overwritten)"
+                        "Preserved as machine-local override (never read, hashed, or overwritten)"
                     } else {
-                        "Machine-local override target not yet present"
+                        "Machine-local override target is missing on machine"
                     }
                     .to_string(),
                 ),
             };
         }
 
-        // 3. Inspect source file
+        // 3. Inspect source file boundaries and symlinks
+        let repo_root_canonical = match self.repo_root.canonicalize() {
+            Ok(c) => c,
+            Err(_) => self.repo_root.to_path_buf(),
+        };
+
+        if Path::new(&file.source).is_absolute()
+            || Path::new(&file.source)
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return ObservedConfigFile {
+                source_path,
+                target_path,
+                state: ConfigFileState::SourceOutsideRoot,
+                source_hash: None,
+                target_hash: None,
+                target_size: None,
+                is_symlink: false,
+                symlink_target: None,
+                diagnostic: Some(
+                    "Source path is absolute or contains directory traversal ('..')".to_string(),
+                ),
+            };
+        }
+
         let source_metadata = match std::fs::symlink_metadata(&source_path) {
             Ok(meta) => Some(meta),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -120,6 +143,41 @@ impl<'a> ConfigInspector<'a> {
                 symlink_target: None,
                 diagnostic: Some("Source file does not exist in repository".to_string()),
             };
+        }
+
+        // Canonicalize source to ensure it does not escape repo root through symlinks
+        match source_path.canonicalize() {
+            Ok(canonical_source) => {
+                if !canonical_source.starts_with(&repo_root_canonical) {
+                    return ObservedConfigFile {
+                        source_path,
+                        target_path,
+                        state: ConfigFileState::SourceOutsideRoot,
+                        source_hash: None,
+                        target_hash: None,
+                        target_size: None,
+                        is_symlink: false,
+                        symlink_target: None,
+                        diagnostic: Some(
+                            "Source path escapes repository root via symlink or traversal"
+                                .to_string(),
+                        ),
+                    };
+                }
+            }
+            Err(e) => {
+                return ObservedConfigFile {
+                    source_path,
+                    target_path,
+                    state: ConfigFileState::Unreadable,
+                    source_hash: None,
+                    target_hash: None,
+                    target_size: None,
+                    is_symlink: false,
+                    symlink_target: None,
+                    diagnostic: Some(format!("Failed to resolve canonical source path: {e}")),
+                };
+            }
         }
 
         let source_hash = match compute_sha256(&source_path) {

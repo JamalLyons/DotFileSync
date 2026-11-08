@@ -106,6 +106,21 @@ fn test_directory_traversal_rejected() {
 }
 
 #[test]
+fn test_absolute_source_path_rejected() {
+    let mut manifest = Manifest::new(CURRENT_SCHEMA_VERSION);
+    manifest.files = vec![TrackedFile {
+        source: "/etc/passwd".into(),
+        target: "~/.config/evil".into(),
+        machine_local: false,
+        description: None,
+    }];
+    let errs = validate_manifest(&manifest).unwrap_err();
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e, ValidationError::AbsoluteSourcePath { .. })));
+}
+
+#[test]
 fn test_sensitive_credential_paths_rejected() {
     let sensitive_paths = [
         ("ssh/key", "~/.ssh/id_rsa"),

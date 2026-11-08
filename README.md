@@ -177,21 +177,25 @@ Apache-2.0
 - **`dotfilesync-core`**: Reusable domain models, manifest schema validation, command runner abstraction with timeout protection, static Brewfile parser, filesystem inspection, and diff comparison engine. Completely UI-framework agnostic.
 - **`dotfilesync-cli`**: Command-line binary (`dotfilesync`) providing human-friendly and `--json` structured output.
 
-### Building and Testing
+### Toolchain and Building
+
+Requires **Rust 1.85+** (MSRV 1.85).
 
 ```bash
 # Build the workspace
 cargo build --workspace
 
-# Run tests
+# Run tests (fully fixture-isolated)
 cargo test --workspace
 
 # Check formatting and clippy
-cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-### CLI Commands (Read-Only)
+### CLI Commands
+
+Commands `scan` and `status` are strictly **read-only**, while `import-brewfile` provides a safe path to write a new manifest file (refusing to overwrite existing files).
 
 #### 1. Scan (`dotfilesync scan`)
 Discovers installed Homebrew formulae and casks, their observed versions, and inspects only explicitly tracked configuration paths.
@@ -215,18 +219,21 @@ cargo run -p dotfilesync-cli -- status --manifest dotfilesync.toml --json
 ```
 
 Differences are classified into:
-- **`matching`**: Declared and present on the machine with identical content/hash.
+- **`matching`**: Reserved strictly for verified equivalence between repository source and machine target under the comparison policy.
 - **`missing`**: Declared in the manifest but absent from the machine.
 - **`changed`**: Config file drift detected (content/hash differs between repository template and machine).
 - **`unmanaged`**: Present on the machine but not declared in the manifest (unmanaged does *not* mean unwanted).
-- **`unknown`**: Diagnostic recorded if Homebrew is unavailable or a command failed (ensures an unavailable tool never falsely claims all packages are missing).
+- **`unknown`**: Diagnostic recorded if Homebrew is unavailable or package enumeration failed (ensures an unavailable tool never falsely claims all packages are missing), or if a config file is unreadable.
+- **`skipped`**: Explicitly excluded or machine-local override files. These are preserved and never counted as matching content.
 
 #### 3. Static Brewfile Import (`dotfilesync import-brewfile`)
-Statically parses a Brewfile without executing Ruby code (prohibits arbitrary code execution). Straightforward `brew` and `cask` declarations are captured, while options and dynamic Ruby constructs (`if`, `unless`, `def`, `system`, `ENV`, string interpolation, `mas`, `tap`) are explicitly reported with line numbers.
+Statically parses a Brewfile without executing Ruby code (prohibits arbitrary code execution). Straightforward `brew` and `cask` declarations are captured, while options and dynamic Ruby constructs (`if`, `unless`, `def`, `system`, `ENV`, string interpolation, `mas`, `tap`, trailing expressions) are explicitly reported with line numbers.
+
+When `--output <path>` is provided, `dotfilesync` writes a new manifest skeleton using atomic `create_new` semantics. It strictly **refuses to overwrite** an existing manifest file, leaving existing bytes, file mappings, and exclusions untouched.
 
 ```bash
-# Parse existing Brewfile and generate a manifest skeleton
-cargo run -p dotfilesync-cli -- import-brewfile --brewfile Brewfile --output dotfilesync.toml
+# Parse existing Brewfile and generate a new manifest skeleton
+cargo run -p dotfilesync-cli -- import-brewfile --brewfile Brewfile --output dotfilesync.new.toml
 ```
 
 ### Manifest Schema (`dotfilesync.toml`)

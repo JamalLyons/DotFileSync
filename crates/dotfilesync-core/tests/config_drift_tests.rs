@@ -2,7 +2,9 @@ use std::fs;
 use tempfile::tempdir;
 
 use dotfilesync_core::{
-    ConfigFileState, ConfigInspector, ExclusionsSection, MachineOverride, TrackedFile,
+    compare_status, BrewDiscoveryResult, ConfigFileState, ConfigInspector,
+    DifferenceClassification, ExclusionsSection, MachineOverride, Manifest, TrackedFile,
+    CURRENT_SCHEMA_VERSION,
 };
 
 #[test]
@@ -35,8 +37,6 @@ fn test_config_matching_and_changed_and_missing() {
 
     let drift_tgt = target_dir.join("drift.conf");
     fs::write(&drift_tgt, "setting=custom_machine_override\n").unwrap(); // drifted
-
-    // missing_tgt is not created
 
     let exclusions = ExclusionsSection::default();
     let overrides = Vec::new();
@@ -82,7 +82,7 @@ fn test_config_matching_and_changed_and_missing() {
 }
 
 #[test]
-fn test_machine_local_override_is_preserved() {
+fn test_machine_local_override_is_preserved_and_never_hashed() {
     let repo_temp = tempdir().unwrap();
     let home_temp = tempdir().unwrap();
 
@@ -111,11 +111,27 @@ fn test_machine_local_override_is_preserved() {
 
     let observed = inspector.inspect_file(&file);
     assert_eq!(observed.state, ConfigFileState::MachineLocal);
+    // CRITICAL: Must NEVER emit content fingerprints for machine-local or excluded files
+    assert!(observed.source_hash.is_none());
+    assert!(observed.target_hash.is_none());
     assert!(observed
         .diagnostic
         .as_ref()
         .unwrap()
-        .contains("Machine-local override present"));
+        .to_lowercase()
+        .contains("machine-local override"));
+
+    // Test absent machine-local override: must be reported as Missing, never matching
+    let absent_file = TrackedFile {
+        source: "fish/conf.d/absent.fish".into(),
+        target: "~/.config/fish/conf.d/absent.fish".into(),
+        machine_local: true,
+        description: None,
+    };
+    let obs_absent = inspector.inspect_file(&absent_file);
+    assert_eq!(obs_absent.state, ConfigFileState::Missing);
+    assert!(obs_absent.source_hash.is_none());
+    assert!(obs_absent.target_hash.is_none());
 }
 
 #[test]
@@ -158,6 +174,8 @@ fn test_explicit_exclusions_path_and_pattern() {
     let results = inspector.inspect_files(&files);
     for r in results {
         assert_eq!(r.state, ConfigFileState::Excluded);
+        assert!(r.source_hash.is_none());
+        assert!(r.target_hash.is_none());
     }
 }
 
@@ -223,6 +241,126 @@ fn test_symlink_edge_cases() {
     };
     let obs3 = inspector.inspect_file(&file_broken);
     assert_eq!(obs3.state, ConfigFileState::BrokenSymlink);
+}
+
+#[cfg(unix)]
+#[test]
+fn test_source_symlinks_escaping_repo_root_are_rejected() {
+    use std::os::unix::fs::symlink;
+
+    let repo_temp = tempdir().unwrap();
+    let outside_temp = tempdir().unwrap();
+    let home_temp = tempdir().unwrap();
+
+    let repo_root = repo_temp.path();
+    let home_dir = home_temp.path();
+
+    // Create an outside secret file
+    let outside_file = outside_temp.path().join("secret.conf");
+    fs::write(&outside_file, "OUTSIDE SECRET VALUE\n").unwrap();
+
+    // Create an outside directory
+    let outside_dir = outside_temp.path().join("external_dir");
+    fs::create_dir_all(&outside_dir).unwrap();
+    let outside_nested_file = outside_dir.join("nested.conf");
+    fs::write(&outside_nested_file, "OUTSIDE NESTED VALUE\n").unwrap();
+
+    // 1. In repo: symlink pointing to outside file
+    let repo_symlink = repo_root.join("escape_symlink.conf");
+    symlink(&outside_file, &repo_symlink).unwrap();
+
+    // 2. In repo: symlinked parent directory pointing to outside dir
+    let repo_symdir = repo_root.join("escaped_parent");
+    symlink(&outside_dir, &repo_symdir).unwrap();
+
+    let exclusions = ExclusionsSection::default();
+    let overrides = Vec::new();
+    let inspector = ConfigInspector::new(repo_root, home_dir, &exclusions, &overrides);
+
+    // Test 1: Direct escaping symlink
+    let file1 = TrackedFile {
+        source: "escape_symlink.conf".into(),
+        target: "~/.config/target1.conf".into(),
+        machine_local: false,
+        description: None,
+    };
+    let obs1 = inspector.inspect_file(&file1);
+    assert_eq!(obs1.state, ConfigFileState::SourceOutsideRoot);
+    assert!(obs1.source_hash.is_none());
+    assert!(obs1.diagnostic.unwrap().contains("escapes repository root"));
+
+    // Test 2: Symlinked parent directory escaping repo root
+    let file2 = TrackedFile {
+        source: "escaped_parent/nested.conf".into(),
+        target: "~/.config/target2.conf".into(),
+        machine_local: false,
+        description: None,
+    };
+    let obs2 = inspector.inspect_file(&file2);
+    assert_eq!(obs2.state, ConfigFileState::SourceOutsideRoot);
+    assert!(obs2.source_hash.is_none());
+    assert!(obs2.diagnostic.unwrap().contains("escapes repository root"));
+}
+
+#[test]
+fn test_status_semantics_for_machine_local_and_excluded() {
+    let repo_temp = tempdir().unwrap();
+    let home_temp = tempdir().unwrap();
+
+    let repo_root = repo_temp.path();
+    let home_dir = home_temp.path();
+
+    let mut manifest = Manifest::new(CURRENT_SCHEMA_VERSION);
+    manifest.exclusions.paths = vec!["~/.config/excluded.conf".into()];
+    manifest.overrides = vec![MachineOverride {
+        target: "~/.config/local.conf".into(),
+        description: Some("Machine local".into()),
+    }];
+    manifest.files = vec![
+        TrackedFile {
+            source: "local.conf".into(),
+            target: "~/.config/local.conf".into(),
+            machine_local: true,
+            description: None,
+        },
+        TrackedFile {
+            source: "excluded.conf".into(),
+            target: "~/.config/excluded.conf".into(),
+            machine_local: false,
+            description: None,
+        },
+    ];
+
+    // Create target file for local.conf so it is present
+    let local_tgt = home_dir.join(".config/local.conf");
+    fs::create_dir_all(local_tgt.parent().unwrap()).unwrap();
+    fs::write(&local_tgt, "TOKEN=abc\n").unwrap();
+
+    let inspector = ConfigInspector::new(
+        repo_root,
+        home_dir,
+        &manifest.exclusions,
+        &manifest.overrides,
+    );
+    let configs = inspector.inspect_files(&manifest.files);
+
+    let brew_result = BrewDiscoveryResult {
+        available: true,
+        packages_enumerated: true,
+        ..Default::default()
+    };
+
+    let report = compare_status(&manifest, &brew_result, &configs);
+
+    // CRITICAL SEMANTICS:
+    // Excluded and machine-local entries must NOT increment configs_matching!
+    assert_eq!(report.summary.configs_matching, 0);
+    assert_eq!(report.summary.configs_skipped, 2);
+    for diff in &report.config_differences {
+        assert_eq!(diff.classification, DifferenceClassification::Skipped);
+        assert!(diff.source_hash.is_none());
+        assert!(diff.target_hash.is_none());
+    }
 }
 
 #[test]

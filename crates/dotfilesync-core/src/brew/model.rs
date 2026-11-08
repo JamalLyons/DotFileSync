@@ -21,7 +21,10 @@ pub struct ObservedPackage {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrewDiscoveryResult {
+    /// Whether the Homebrew executable was located
     pub available: bool,
+    /// Whether package inventory enumeration succeeded
+    pub packages_enumerated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub brew_path: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]

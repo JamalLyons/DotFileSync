@@ -13,6 +13,7 @@ pub enum ConfigFileState {
     SymlinkExternal,
     BrokenSymlink,
     SourceMissing,
+    SourceOutsideRoot,
     Unreadable,
 }
 

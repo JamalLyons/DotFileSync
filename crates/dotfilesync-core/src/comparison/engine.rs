@@ -17,17 +17,22 @@ pub fn compare_status(
     let mut diagnostics = brew_result.diagnostics.clone();
 
     // 1. Process Packages
-    if !brew_result.available {
-        // Homebrew is not available: MUST NOT falsely claim packages are missing.
+    if !brew_result.available || !brew_result.packages_enumerated {
+        let reason = if !brew_result.available {
+            "Homebrew executable is unavailable; status cannot be verified"
+        } else {
+            "Homebrew package inventory enumeration failed; status cannot be verified"
+        };
+
         for f in &manifest.package_managers.homebrew.formulae {
             package_differences.push(PackageDifference {
                 name: f.clone(),
                 kind: PackageKind::Formula,
                 classification: DifferenceClassification::Unknown,
                 desired: true,
-                installed: false,
+                installed: None,
                 observed_version: None,
-                diagnostic: Some("Homebrew is unavailable; status cannot be verified".to_string()),
+                diagnostic: Some(reason.to_string()),
             });
             summary.packages_unknown += 1;
         }
@@ -38,9 +43,9 @@ pub fn compare_status(
                 kind: PackageKind::Cask,
                 classification: DifferenceClassification::Unknown,
                 desired: true,
-                installed: false,
+                installed: None,
                 observed_version: None,
-                diagnostic: Some("Homebrew is unavailable; status cannot be verified".to_string()),
+                diagnostic: Some(reason.to_string()),
             });
             summary.packages_unknown += 1;
         }
@@ -66,7 +71,7 @@ pub fn compare_status(
                     kind: PackageKind::Formula,
                     classification: DifferenceClassification::Matching,
                     desired: true,
-                    installed: true,
+                    installed: Some(true),
                     observed_version: pkg.version.clone(),
                     diagnostic: None,
                 });
@@ -77,7 +82,7 @@ pub fn compare_status(
                     kind: PackageKind::Formula,
                     classification: DifferenceClassification::Missing,
                     desired: true,
-                    installed: false,
+                    installed: Some(false),
                     observed_version: None,
                     diagnostic: Some(
                         "Formula is declared in manifest but not installed".to_string(),
@@ -95,7 +100,7 @@ pub fn compare_status(
                     kind: PackageKind::Formula,
                     classification: DifferenceClassification::Unmanaged,
                     desired: false,
-                    installed: true,
+                    installed: Some(true),
                     observed_version: pkg.version.clone(),
                     diagnostic: Some(
                         "Installed on system but not declared in manifest".to_string(),
@@ -114,7 +119,7 @@ pub fn compare_status(
                     kind: PackageKind::Cask,
                     classification: DifferenceClassification::Matching,
                     desired: true,
-                    installed: true,
+                    installed: Some(true),
                     observed_version: pkg.version.clone(),
                     diagnostic: None,
                 });
@@ -125,7 +130,7 @@ pub fn compare_status(
                     kind: PackageKind::Cask,
                     classification: DifferenceClassification::Missing,
                     desired: true,
-                    installed: false,
+                    installed: Some(false),
                     observed_version: None,
                     diagnostic: Some("Cask is declared in manifest but not installed".to_string()),
                 });
@@ -141,7 +146,7 @@ pub fn compare_status(
                     kind: PackageKind::Cask,
                     classification: DifferenceClassification::Unmanaged,
                     desired: false,
-                    installed: true,
+                    installed: Some(true),
                     observed_version: pkg.version.clone(),
                     diagnostic: Some(
                         "Installed on system but not declared in manifest".to_string(),
@@ -156,7 +161,8 @@ pub fn compare_status(
     let mut config_differences = Vec::new();
     for observed in configs {
         if (observed.state == ConfigFileState::Unreadable
-            || observed.state == ConfigFileState::SourceMissing)
+            || observed.state == ConfigFileState::SourceMissing
+            || observed.state == ConfigFileState::SourceOutsideRoot)
             && observed.diagnostic.is_some()
         {
             if let Some(err) = &observed.diagnostic {
@@ -177,17 +183,16 @@ pub fn compare_status(
                 )
             }
             ConfigFileState::MachineLocal => {
-                summary.configs_matching += 1;
+                summary.configs_skipped += 1;
                 (
-                    DifferenceClassification::Matching,
+                    DifferenceClassification::Skipped,
                     Some("Preserved as machine-local override (not modified)".to_string()),
                 )
             }
             ConfigFileState::Excluded => {
-                // Excluded files are treated as matching / ignored
-                summary.configs_matching += 1;
+                summary.configs_skipped += 1;
                 (
-                    DifferenceClassification::Matching,
+                    DifferenceClassification::Skipped,
                     Some("Excluded by manifest rule".to_string()),
                 )
             }
@@ -207,7 +212,9 @@ pub fn compare_status(
                     observed.diagnostic.clone(),
                 )
             }
-            ConfigFileState::SourceMissing | ConfigFileState::Unreadable => {
+            ConfigFileState::SourceMissing
+            | ConfigFileState::SourceOutsideRoot
+            | ConfigFileState::Unreadable => {
                 summary.configs_unknown += 1;
                 (
                     DifferenceClassification::Unknown,

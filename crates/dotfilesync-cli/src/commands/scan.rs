@@ -24,10 +24,20 @@ pub struct ScanArgs {
     /// Override repository root path (defaults to manifest parent dir or current directory)
     #[arg(long)]
     pub repo_root: Option<PathBuf>,
+
+    /// Override Homebrew binary path (primarily for testing and controlled environments)
+    #[arg(long, hide = true)]
+    pub brew_bin: Option<PathBuf>,
 }
 
 pub fn execute(args: ScanArgs) -> Result<()> {
-    let runner = RealCommandRunner::default();
+    let mut runner = RealCommandRunner::default();
+    let brew_bin = args
+        .brew_bin
+        .or_else(|| std::env::var_os("DOTFILESYNC_BREW_BIN").map(PathBuf::from));
+    if let Some(bin) = brew_bin {
+        runner = runner.with_brew_binary(bin);
+    }
     let homebrew_result = discover_homebrew(&runner);
 
     let home_dir = args
