@@ -1,7 +1,10 @@
 pub mod model;
 pub mod validation;
 
+use std::ffi::OsString;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -59,17 +62,114 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String, ManifestError> 
     Ok(toml::to_string_pretty(manifest)?)
 }
 
+/// Decodes a manifest path string into native path bytes.
+///
+/// Standard UTF-8 paths are preserved as-is. If the path contains percent-encoded
+/// byte sequences (e.g. `%FF` or `%fe`), they are decoded into their raw native byte values,
+/// allowing manifest files to represent arbitrary non-UTF-8 paths without violating
+/// the TOML specification's UTF-8 requirement.
+pub fn decode_manifest_path_bytes(path_str: &str) -> PathBuf {
+    #[cfg(unix)]
+    {
+        let bytes = path_str.as_bytes();
+        let mut decoded = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                if let (Some(h1), Some(h2)) =
+                    (from_hex_digit(bytes[i + 1]), from_hex_digit(bytes[i + 2]))
+                {
+                    decoded.push((h1 << 4) | h2);
+                    i += 3;
+                    continue;
+                }
+            }
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+        PathBuf::from(OsString::from_vec(decoded))
+    }
+    #[cfg(not(unix))]
+    {
+        PathBuf::from(path_str)
+    }
+}
+
+/// Encodes a native filesystem path into a valid UTF-8 manifest path string.
+///
+/// If the path contains valid UTF-8, it is returned as a UTF-8 string (preserving
+/// standard path characters). Any non-UTF-8 byte sequences are percent-encoded
+/// (`%HH`) to ensure full fidelity without lossy replacement characters.
+pub fn encode_manifest_path_bytes(path: &Path) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = path.as_os_str().as_bytes();
+        match std::str::from_utf8(bytes) {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                let mut encoded = String::with_capacity(bytes.len() * 3);
+                let mut remaining = bytes;
+                while !remaining.is_empty() {
+                    match std::str::from_utf8(remaining) {
+                        Ok(valid) => {
+                            encoded.push_str(valid);
+                            break;
+                        }
+                        Err(err) => {
+                            let (valid, after_valid) = remaining.split_at(err.valid_up_to());
+                            if let Ok(valid_str) = std::str::from_utf8(valid) {
+                                encoded.push_str(valid_str);
+                            }
+                            if let Some(err_len) = err.error_len() {
+                                for &b in &after_valid[..err_len] {
+                                    use std::fmt::Write;
+                                    let _ = write!(encoded, "%{:02X}", b);
+                                }
+                                remaining = &after_valid[err_len..];
+                            } else {
+                                for &b in after_valid {
+                                    use std::fmt::Write;
+                                    let _ = write!(encoded, "%{:02X}", b);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                encoded
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        path.to_string_lossy().to_string()
+    }
+}
+
+fn from_hex_digit(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Expands leading `~` to the provided home directory or environment HOME.
 ///
 /// If `home_dir` contains native non-UTF-8 bytes, those bytes are preserved intact
 /// in the resulting `PathBuf` without lossy conversion.
+/// If `target` contains percent-encoded byte sequences (e.g. `%FF`), they are decoded
+/// into raw native path bytes.
 pub fn expand_target_path(target: &str, home_dir: &Path) -> PathBuf {
     if let Some(stripped) = target.strip_prefix("~/") {
-        home_dir.join(stripped)
+        let decoded = decode_manifest_path_bytes(stripped);
+        home_dir.join(decoded)
     } else if target == "~" {
         home_dir.to_path_buf()
     } else {
-        PathBuf::from(target)
+        decode_manifest_path_bytes(target)
     }
 }
 
@@ -77,8 +177,11 @@ pub fn expand_target_path(target: &str, home_dir: &Path) -> PathBuf {
 ///
 /// If `base_dir` contains native non-UTF-8 bytes, those bytes are preserved intact
 /// in the resulting `PathBuf` without lossy conversion.
+/// If `source` contains percent-encoded byte sequences (e.g. `%FF`), they are decoded
+/// into raw native path bytes.
 pub fn resolve_source_path(source: &str, base_dir: &Path) -> PathBuf {
-    base_dir.join(source)
+    let decoded = decode_manifest_path_bytes(source);
+    base_dir.join(decoded)
 }
 
 #[cfg(test)]
@@ -155,5 +258,34 @@ target = "~/.ssh/id_rsa"
 "#;
         let err = parse_manifest(toml_str).unwrap_err();
         assert!(matches!(err, ManifestError::Validation(..)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_percent_encoded_path_roundtrip() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        // Standard UTF-8 path
+        let path = Path::new("fish/config.fish");
+        assert_eq!(encode_manifest_path_bytes(path), "fish/config.fish");
+        assert_eq!(decode_manifest_path_bytes("fish/config.fish"), path);
+
+        // Path with invalid UTF-8 byte 0xFF
+        let raw_bytes = b"fish/custom_\xff.conf";
+        let non_utf8_path = Path::new(OsStr::from_bytes(raw_bytes));
+        let encoded = encode_manifest_path_bytes(non_utf8_path);
+        assert_eq!(encoded, "fish/custom_%FF.conf");
+
+        let decoded = decode_manifest_path_bytes(&encoded);
+        assert_eq!(decoded.as_os_str().as_bytes(), raw_bytes);
+
+        // Path with multiple non-UTF-8 bytes
+        let raw_bytes2 = b".config/sub_\xfe\xed/test.conf";
+        let non_utf8_path2 = Path::new(OsStr::from_bytes(raw_bytes2));
+        let encoded2 = encode_manifest_path_bytes(non_utf8_path2);
+        assert_eq!(encoded2, ".config/sub_%FE%ED/test.conf");
+        let decoded2 = decode_manifest_path_bytes(&encoded2);
+        assert_eq!(decoded2.as_os_str().as_bytes(), raw_bytes2);
     }
 }

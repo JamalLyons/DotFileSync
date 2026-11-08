@@ -153,18 +153,55 @@ fn test_real_runner_background_descendant_holding_pipes_open() {
 #[cfg(unix)]
 #[test]
 fn test_real_runner_detached_session_descendant_is_terminated() {
-    // Test case where a descendant detaches itself into a new session via setsid
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    struct ProcessCleanupGuard {
+        pid_file: PathBuf,
+    }
+
+    impl Drop for ProcessCleanupGuard {
+        fn drop(&mut self) {
+            if let Ok(content) = std::fs::read_to_string(&self.pid_file) {
+                if let Ok(pid) = content.trim().parse::<i32>() {
+                    unsafe {
+                        libc::kill(-pid, libc::SIGKILL);
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                }
+            }
+        }
+    }
+
+    let temp_dir = tempdir().unwrap();
+    let pid_file = temp_dir.path().join("detached_session_grandchild.pid");
+    let _guard = ProcessCleanupGuard {
+        pid_file: pid_file.clone(),
+    };
+
+    let pid_file_str = pid_file.to_str().unwrap();
+    let script = format!(
+        r#"
+import subprocess, sys, time, os
+pid_file = "{pid_file_str}"
+gc_code = f"""
+import os, time
+os.setsid()
+with open('{pid_file_str}', 'w') as f:
+    f.write(str(os.getpid()) + '\\n')
+    f.flush()
+time.sleep(3)
+"""
+p = subprocess.Popen([sys.executable, "-c", gc_code])
+p.wait()
+"#
+    );
+
     let timeout = Duration::from_millis(400);
     let runner = RealCommandRunner::new(timeout);
     let start = Instant::now();
 
-    // Spawns a python script that launches a detached grandchild with setsid() and sleeps 3s
-    let code = r#"
-import subprocess, sys, time
-p = subprocess.Popen([sys.executable, "-c", "import os, time; os.setsid(); time.sleep(3)"])
-p.wait()
-"#;
-    let res = runner.run("python3", &["-c", code]);
+    let res = runner.run("python3", &["-c", &script]);
     let elapsed = start.elapsed();
 
     assert!(
@@ -179,6 +216,17 @@ p.wait()
     match res {
         Err(RunnerError::Timeout { .. }) => {}
         other => panic!("Expected Timeout error, got: {other:?}"),
+    }
+
+    // Verify that the runner actively discovered and terminated the detached session grandchild
+    if let Ok(content) = std::fs::read_to_string(&pid_file) {
+        if let Ok(pid) = content.trim().parse::<i32>() {
+            let res = unsafe { libc::kill(pid, 0) };
+            assert_eq!(
+                res, -1,
+                "Detached session grandchild (PID {pid}) should have been terminated by runner"
+            );
+        }
     }
 }
 

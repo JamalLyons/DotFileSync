@@ -492,12 +492,63 @@ fn test_apfs_filesystem_utf8_restriction_verified_honestly() {
                 raw_code == Some(92) || e.kind() == std::io::ErrorKind::InvalidInput,
                 "Expected APFS EILSEQ (Errno 92) or InvalidInput, got: {e:?} (os_error: {raw_code:?})"
             );
+
+            // Verify inspector handles missing APFS target while preserving exact non-UTF-8 bytes
+            fs::write(temp.path().join("dummy"), "content").unwrap();
+            let empty_exclusions = ExclusionsSection::default();
+            let inspector = ConfigInspector::new(temp.path(), temp.path(), &empty_exclusions, &[]);
+            let tracked = TrackedFile {
+                source: "dummy".into(),
+                target: "~/non_utf8_%FF_test".into(),
+                machine_local: false,
+                description: None,
+            };
+            let observed = inspector.inspect_file(&tracked);
+            assert_eq!(observed.state, ConfigFileState::Missing);
+            assert!(observed
+                .target_path
+                .as_os_str()
+                .as_bytes()
+                .ends_with(b"non_utf8_\xff_test"));
         }
         Ok(()) => {
             // Clean up if running on a filesystem that permits arbitrary bytes
             let _ = fs::remove_file(&test_path);
         }
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_manifest_percent_encoded_path_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let repo_temp = tempdir().unwrap();
+    let home_temp = tempdir().unwrap();
+
+    let empty_exclusions = ExclusionsSection::default();
+    let inspector =
+        ConfigInspector::new(repo_temp.path(), home_temp.path(), &empty_exclusions, &[]);
+
+    let tracked = TrackedFile {
+        source: "config/custom_%FF.conf".into(),
+        target: "~/.config/custom_%FE.conf".into(),
+        machine_local: false,
+        description: None,
+    };
+
+    let observed = inspector.inspect_file(&tracked);
+    assert!(observed
+        .source_path
+        .as_os_str()
+        .as_bytes()
+        .ends_with(b"/config/custom_\xff.conf"));
+    assert!(observed
+        .target_path
+        .as_os_str()
+        .as_bytes()
+        .ends_with(b"/.config/custom_\xfe.conf"));
+    assert_eq!(observed.state, ConfigFileState::SourceMissing);
 }
 
 #[test]
