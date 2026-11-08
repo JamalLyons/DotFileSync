@@ -165,3 +165,97 @@ Git abbreviations: `gst`, `gco`, `gaa`, `gcm`, `gps`, `gpl`, …
 ## License
 
 Apache-2.0
+
+---
+
+## dotfilesync (Rust Environment Manager)
+
+`dotfilesync` is the macOS-first developer environment manager written in Rust, laying the foundation for a future GPUI-based environment manager. In this first milestone, `dotfilesync` provides a safe, read-only CLI and core domain library for discovering system state, tracking explicit configuration files, and detecting drift without modifying your system.
+
+### Architecture
+
+- **`dotfilesync-core`**: Reusable domain models, manifest schema validation, command runner abstraction with timeout protection, static Brewfile parser, filesystem inspection, and diff comparison engine. Completely UI-framework agnostic.
+- **`dotfilesync-cli`**: Command-line binary (`dotfilesync`) providing human-friendly and `--json` structured output.
+
+### Toolchain and Building
+
+Requires **macOS** and **Rust 1.85+** (MSRV 1.85). Dotfilesync Milestone 1 is built exclusively for macOS; building on Linux or Windows is unsupported and prevented at compile time.
+
+```bash
+# Build the workspace
+cargo build --workspace
+
+# Run tests (fully fixture-isolated)
+cargo test --workspace
+
+# Check formatting and clippy
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
+
+### CLI Commands
+
+Commands `scan` and `status` are strictly **read-only** inspection commands. They never install software, uninstall packages, modify shell or environment files, or mutate system configurations. Meanwhile, `import-brewfile --output <path>` explicitly creates a **new** file and strictly refuses to replace or overwrite an existing file.
+
+#### 1. Scan (`dotfilesync scan`)
+Strictly read-only: discovers installed Homebrew formulae and casks, their observed versions, and inspects only explicitly tracked configuration paths without altering system state.
+
+```bash
+# Human-readable output using default dotfilesync.toml if present
+cargo run -p dotfilesync-cli -- scan
+
+# Structured JSON output
+cargo run -p dotfilesync-cli -- scan --manifest dotfilesync.toml --json
+```
+
+#### 2. Status (`dotfilesync status --manifest <path>`)
+Strictly read-only: compares the desired state defined in a versioned manifest against the observed system state without making any modifications.
+
+```bash
+cargo run -p dotfilesync-cli -- status --manifest dotfilesync.toml
+
+# JSON output
+cargo run -p dotfilesync-cli -- status --manifest dotfilesync.toml --json
+```
+
+Differences are classified into:
+- **`matching`**: Reserved strictly for verified equivalence between repository source and machine target under the comparison policy.
+- **`missing`**: Declared in the manifest but absent from the machine. (Absent machine-local overrides are clearly distinguished in human-readable output from ordinary missing managed configs that require restoration from repository templates).
+- **`changed`**: Config file drift detected (content/hash differs between repository template and machine).
+- **`unmanaged`**: Present on the machine but not declared in the manifest (unmanaged does *not* mean unwanted).
+- **`unknown`**: Diagnostic recorded if Homebrew is unavailable or package enumeration failed (ensures an unavailable tool never falsely claims all packages are missing), or if a config file is unreadable.
+- **`skipped`**: Explicitly excluded or machine-local override files. These are preserved and never counted as matching content.
+
+#### 3. Static Brewfile Import (`dotfilesync import-brewfile`)
+Statically parses a Brewfile without executing Ruby code (prohibits arbitrary code execution). Straightforward `brew` and `cask` declarations are captured, while options and dynamic Ruby constructs (`if`, `unless`, `def`, `system`, `ENV`, string interpolation, `mas`, `tap`, trailing expressions) are explicitly reported with line numbers.
+
+When `--output <path>` is provided, `dotfilesync` explicitly creates a **new** manifest file using atomic filesystem semantics (`create_new`). It strictly **refuses to replace or overwrite** an existing manifest file, preserving existing file bytes, mappings, and exclusions untouched.
+
+```bash
+# Parse existing Brewfile and generate a new manifest skeleton
+cargo run -p dotfilesync-cli -- import-brewfile --brewfile Brewfile --output dotfilesync.new.toml
+```
+
+### Manifest Schema (`dotfilesync.toml`)
+
+The repository includes a versioned `dotfilesync.toml` manifest modeling the current `Brewfile`, `fish/` configuration, and `zed/settings.json`.
+
+Key capabilities:
+- **Explicit Tracking**: Separate repository `source` and machine `target` paths (e.g. `~/.config/fish/config.fish`).
+- **Exclusions**: Explicit paths and glob patterns (`*.backup.*`, `*.key`, `*secret*`, `*credential*`) are excluded from drift checks.
+- **Machine-Local Overrides**: Files like `~/.config/fish/conf.d/local.fish` are recognized as machine-local and preserved without drift warnings or overwrite risks.
+- **Credential Protection**: Strict validation prevents tracking sensitive paths like `~/.ssh/id_*`, `~/.aws/credentials`, or `~/.gnupg`.
+
+### Existing Behaviors Preserved
+
+- **Bash Installer (`setup.sh`)**: The existing Bash bootstrapper, `Brewfile`, and helper scripts in `lib/` remain 100% untouched and fully operational.
+- **Safety First**: Milestone 1 contains zero write, delete, shell modification, or `sudo` operations. File contents are never printed in scan or status output.
+- **Test Isolation**: All discovery and runner mechanisms are abstracted behind traits with unit fixtures and mock outputs, preventing tests from modifying or relying on actual machine state.
+
+### Current Limitations
+
+- **Read-Only**: Does not install packages, copy files, or mutate system configurations.
+- **No GUI**: GPUI interface integration is slated for future milestones.
+- **No Remote Git Sync**: Future state sync will use a dedicated user-owned private state repository rather than personal branches in this repo.
+- **Language Managers**: Integrations for `fnm`, `nvm`, and Java manager diagnostics will be introduced in subsequent milestones.
+

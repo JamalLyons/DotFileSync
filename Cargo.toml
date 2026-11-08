@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "crates/dotfilesync-core",
+    "crates/dotfilesync-cli",
+]
+resolver = "2"
+
+[workspace.package]
+rust-version = "1.85"
+edition = "2021"
+license = "Apache-2.0"

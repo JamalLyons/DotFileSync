@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, "feature/**" ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  format:
+    name: Code Formatting (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy Lint (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run strict clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  msrv:
+    name: MSRV Verification (Rust 1.85 on macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MSRV Rust toolchain (1.85.0)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85.0"
+      - name: Verify workspace tests with MSRV and locked dependencies
+        run: cargo test --workspace --locked
+
+  test:
+    name: Tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run fixture-isolated tests
+        run: cargo test --workspace --locked
+
+  real-homebrew-integration:
+    name: Real macOS Homebrew Integration Check
+    runs-on: macos-latest
+    needs: [test, msrv]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run live macOS integration test suite with controlled fixtures
+        run: cargo test -p dotfilesync-cli --test cli_tests test_live_macos_scan_and_status_controlled_fixtures -- --nocapture
+      - name: Run read-only scan against host Homebrew with isolated home
+        run: |
+          mkdir -p "$RUNNER_TEMP/isolated_home"
+          cargo run -p dotfilesync-cli -- scan --manifest fixtures/sample_manifest.toml --home "$RUNNER_TEMP/isolated_home" --json > "$RUNNER_TEMP/scan_out.json"
+          grep '"homebrew"' "$RUNNER_TEMP/scan_out.json"
+          grep '"available": true' "$RUNNER_TEMP/scan_out.json"
+      - name: Run read-only status against host Homebrew with isolated home
+        run: |
+          mkdir -p "$RUNNER_TEMP/isolated_home"
+          cargo run -p dotfilesync-cli -- status --manifest fixtures/sample_manifest.toml --home "$RUNNER_TEMP/isolated_home" --json > "$RUNNER_TEMP/status_out.json"
+          grep '"homebrew_available": true' "$RUNNER_TEMP/status_out.json"
+          grep '"packages_unknown": 0' "$RUNNER_TEMP/status_out.json"
+
+  verify-unsupported-platforms:
+    name: Verify Unsupported Platforms Fail (Linux & Windows)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Verify build fails on unsupported platform
+        shell: bash
+        run: |
+          if cargo check --workspace; then
+            echo "Expected cargo check to fail on unsupported platform ${{ matrix.os }}, but it succeeded!"
+            exit 1
+          else
+            echo "cargo check correctly failed on unsupported platform ${{ matrix.os }}."
+          fi
