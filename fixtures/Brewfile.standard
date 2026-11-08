@@ -1,0 +1,9 @@
+# fixtures/Brewfile.standard
+# Standard declarative Brewfile with brew and cask entries
+brew "git"
+brew "ripgrep"
+brew "fish"
+brew "bat", args: ["--HEAD"]
+
+cask "ghostty"
+cask "zed"

@@ -1,0 +1,52 @@
+# fixtures/sample_manifest.toml
+schema_version = 1
+
+[metadata]
+name = "fixture-test-env"
+description = "Sample manifest for testing missing packages and config drift"
+
+[package_managers.homebrew]
+formulae = [
+    "git",
+    "ripgrep",
+    "missing-formula-tool",
+]
+
+casks = [
+    "ghostty",
+    "missing-gui-app",
+]
+
+[[files]]
+source = "sample_config.fish"
+target = "~/.config/sample/sample_config.fish"
+description = "Sample config file that will experience drift"
+
+[[files]]
+source = "sample_matching.conf"
+target = "~/.config/sample/sample_matching.conf"
+description = "Sample matching config file"
+
+[[files]]
+source = "sample_missing.conf"
+target = "~/.config/sample/sample_missing.conf"
+description = "Sample config file that is missing on target machine"
+
+[[files]]
+source = "sample_local.conf"
+target = "~/.config/sample/local.conf"
+machine_local = true
+description = "Sample machine-local override file"
+
+[exclusions]
+paths = [
+    "~/.config/sample/local.conf",
+]
+patterns = [
+    "*.backup.*",
+    "*.key",
+]
+
+[[overrides]]
+target = "~/.config/sample/local.conf"
+description = "Machine local override"

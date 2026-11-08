@@ -1,0 +1,197 @@
+# dotfilesync.toml — declarative developer environment manifest
+# Schema version 1
+schema_version = 1
+
+[metadata]
+name = "my-shell"
+description = "macOS developer environment configuration for Jamal Lyons"
+
+[package_managers.homebrew]
+formulae = [
+    "aria2",
+    "bat",
+    "biome",
+    "btop",
+    "cargo-binstall",
+    "cloc",
+    "eza",
+    "fastfetch",
+    "fd",
+    "ffmpeg",
+    "fish",
+    "fnm",
+    "fzf",
+    "gh",
+    "git",
+    "go",
+    "imagemagick",
+    "just",
+    "openjdk",
+    "python",
+    "ripgrep",
+    "rustup",
+    "xcodes",
+    "yt-dlp",
+    "zoxide",
+]
+
+casks = [
+    "antigravity",
+    "audacity",
+    "brave-browser",
+    "claude",
+    "cursor",
+    "dbeaver-community",
+    "discord",
+    "eqmac",
+    "font-0xproto",
+    "ghostty",
+    "github",
+    "google-chrome",
+    "jetbrains-toolbox",
+    "juicy",
+    "lark",
+    "lm-studio",
+    "megasync",
+    "melonds",
+    "minecraft",
+    "obs",
+    "raycast",
+    "rectangle",
+    "roblox",
+    "spotify",
+    "steam",
+    "zed",
+]
+
+# ---------------------------------------------------------------------------
+# Tracked configuration files
+# Explicit mappings with repository source and machine target destination
+# ---------------------------------------------------------------------------
+
+[[files]]
+source = "fish/config.fish"
+target = "~/.config/fish/config.fish"
+description = "Core Fish interactive shell configuration"
+
+[[files]]
+source = "fish/fish_plugins"
+target = "~/.config/fish/fish_plugins"
+description = "Fisher plugin declarations"
+
+[[files]]
+source = "fish/conf.d/fnm.fish"
+target = "~/.config/fish/conf.d/fnm.fish"
+description = "fnm Node manager integration"
+
+[[files]]
+source = "fish/functions/brewup.fish"
+target = "~/.config/fish/functions/brewup.fish"
+
+[[files]]
+source = "fish/functions/cdf.fish"
+target = "~/.config/fish/functions/cdf.fish"
+
+[[files]]
+source = "fish/functions/duh.fish"
+target = "~/.config/fish/functions/duh.fish"
+
+[[files]]
+source = "fish/functions/editenv.fish"
+target = "~/.config/fish/functions/editenv.fish"
+
+[[files]]
+source = "fish/functions/editfish.fish"
+target = "~/.config/fish/functions/editfish.fish"
+
+[[files]]
+source = "fish/functions/extract.fish"
+target = "~/.config/fish/functions/extract.fish"
+
+[[files]]
+source = "fish/functions/fdir.fish"
+target = "~/.config/fish/functions/fdir.fish"
+
+[[files]]
+source = "fish/functions/ff.fish"
+target = "~/.config/fish/functions/ff.fish"
+
+[[files]]
+source = "fish/functions/flushdns.fish"
+target = "~/.config/fish/functions/flushdns.fish"
+
+[[files]]
+source = "fish/functions/git-cred-clear.fish"
+target = "~/.config/fish/functions/git-cred-clear.fish"
+
+[[files]]
+source = "fish/functions/git-cred-update.fish"
+target = "~/.config/fish/functions/git-cred-update.fish"
+
+[[files]]
+source = "fish/functions/git-cred-view.fish"
+target = "~/.config/fish/functions/git-cred-view.fish"
+
+[[files]]
+source = "fish/functions/grep.fish"
+target = "~/.config/fish/functions/grep.fish"
+
+[[files]]
+source = "fish/functions/helpme.fish"
+target = "~/.config/fish/functions/helpme.fish"
+
+[[files]]
+source = "fish/functions/mkcd.fish"
+target = "~/.config/fish/functions/mkcd.fish"
+
+[[files]]
+source = "fish/functions/note.fish"
+target = "~/.config/fish/functions/note.fish"
+
+[[files]]
+source = "fish/functions/path.fish"
+target = "~/.config/fish/functions/path.fish"
+
+[[files]]
+source = "fish/functions/ql.fish"
+target = "~/.config/fish/functions/ql.fish"
+
+[[files]]
+source = "fish/functions/reload.fish"
+target = "~/.config/fish/functions/reload.fish"
+
+[[files]]
+source = "fish/functions/serve.fish"
+target = "~/.config/fish/functions/serve.fish"
+
+[[files]]
+source = "zed/settings.json"
+target = "~/.config/zed/settings.json"
+description = "Global Zed editor configuration"
+
+# ---------------------------------------------------------------------------
+# Exclusions
+# Files matching these paths or patterns are never inspected for drift
+# ---------------------------------------------------------------------------
+[exclusions]
+paths = [
+    "fish/conf.d/local.fish",
+    "~/.config/fish/conf.d/local.fish",
+]
+patterns = [
+    "*.backup.*",
+    "*.backup",
+    "*.key",
+    "*.token",
+    "*credential*",
+    "*secret*",
+    ".DS_Store",
+]
+
+# ---------------------------------------------------------------------------
+# Machine-local overrides
+# Files acknowledged as machine-local that must not be synced or overwritten
+# ---------------------------------------------------------------------------
+[[overrides]]
+target = "~/.config/fish/conf.d/local.fish"
+description = "Machine-local Fish environment variables and private tokens"

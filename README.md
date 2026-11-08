@@ -165,3 +165,90 @@ Git abbreviations: `gst`, `gco`, `gaa`, `gcm`, `gps`, `gpl`, …
 ## License
 
 Apache-2.0
+
+---
+
+## dotfilesync (Rust Environment Manager)
+
+`dotfilesync` is the macOS-first developer environment manager written in Rust, laying the foundation for a future GPUI-based environment manager. In this first milestone, `dotfilesync` provides a safe, read-only CLI and core domain library for discovering system state, tracking explicit configuration files, and detecting drift without modifying your system.
+
+### Architecture
+
+- **`dotfilesync-core`**: Reusable domain models, manifest schema validation, command runner abstraction with timeout protection, static Brewfile parser, filesystem inspection, and diff comparison engine. Completely UI-framework agnostic.
+- **`dotfilesync-cli`**: Command-line binary (`dotfilesync`) providing human-friendly and `--json` structured output.
+
+### Building and Testing
+
+```bash
+# Build the workspace
+cargo build --workspace
+
+# Run tests
+cargo test --workspace
+
+# Check formatting and clippy
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+### CLI Commands (Read-Only)
+
+#### 1. Scan (`dotfilesync scan`)
+Discovers installed Homebrew formulae and casks, their observed versions, and inspects only explicitly tracked configuration paths.
+
+```bash
+# Human-readable output using default dotfilesync.toml if present
+cargo run -p dotfilesync-cli -- scan
+
+# Structured JSON output
+cargo run -p dotfilesync-cli -- scan --manifest dotfilesync.toml --json
+```
+
+#### 2. Status (`dotfilesync status --manifest <path>`)
+Compares the desired state defined in a versioned manifest against the observed system state.
+
+```bash
+cargo run -p dotfilesync-cli -- status --manifest dotfilesync.toml
+
+# JSON output
+cargo run -p dotfilesync-cli -- status --manifest dotfilesync.toml --json
+```
+
+Differences are classified into:
+- **`matching`**: Declared and present on the machine with identical content/hash.
+- **`missing`**: Declared in the manifest but absent from the machine.
+- **`changed`**: Config file drift detected (content/hash differs between repository template and machine).
+- **`unmanaged`**: Present on the machine but not declared in the manifest (unmanaged does *not* mean unwanted).
+- **`unknown`**: Diagnostic recorded if Homebrew is unavailable or a command failed (ensures an unavailable tool never falsely claims all packages are missing).
+
+#### 3. Static Brewfile Import (`dotfilesync import-brewfile`)
+Statically parses a Brewfile without executing Ruby code (prohibits arbitrary code execution). Straightforward `brew` and `cask` declarations are captured, while options and dynamic Ruby constructs (`if`, `unless`, `def`, `system`, `ENV`, string interpolation, `mas`, `tap`) are explicitly reported with line numbers.
+
+```bash
+# Parse existing Brewfile and generate a manifest skeleton
+cargo run -p dotfilesync-cli -- import-brewfile --brewfile Brewfile --output dotfilesync.toml
+```
+
+### Manifest Schema (`dotfilesync.toml`)
+
+The repository includes a versioned `dotfilesync.toml` manifest modeling the current `Brewfile`, `fish/` configuration, and `zed/settings.json`.
+
+Key capabilities:
+- **Explicit Tracking**: Separate repository `source` and machine `target` paths (e.g. `~/.config/fish/config.fish`).
+- **Exclusions**: Explicit paths and glob patterns (`*.backup.*`, `*.key`, `*secret*`, `*credential*`) are excluded from drift checks.
+- **Machine-Local Overrides**: Files like `~/.config/fish/conf.d/local.fish` are recognized as machine-local and preserved without drift warnings or overwrite risks.
+- **Credential Protection**: Strict validation prevents tracking sensitive paths like `~/.ssh/id_*`, `~/.aws/credentials`, or `~/.gnupg`.
+
+### Existing Behaviors Preserved
+
+- **Bash Installer (`setup.sh`)**: The existing Bash bootstrapper, `Brewfile`, and helper scripts in `lib/` remain 100% untouched and fully operational.
+- **Safety First**: Milestone 1 contains zero write, delete, shell modification, or `sudo` operations. File contents are never printed in scan or status output.
+- **Test Isolation**: All discovery and runner mechanisms are abstracted behind traits with unit fixtures and mock outputs, preventing tests from modifying or relying on actual machine state.
+
+### Current Limitations
+
+- **Read-Only**: Does not install packages, copy files, or mutate system configurations.
+- **No GUI**: GPUI interface integration is slated for future milestones.
+- **No Remote Git Sync**: Future state sync will use a dedicated user-owned private state repository rather than personal branches in this repo.
+- **Language Managers**: Integrations for `fnm`, `nvm`, and Java manager diagnostics will be introduced in subsequent milestones.
+

@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "homebrew_available": true,
+  "brew_version": "Homebrew 4.3.0",
+  "package_differences": [
+    {
+      "name": "git",
+      "kind": "formula",
+      "classification": "matching",
+      "desired": true,
+      "installed": true,
+      "observed_version": "2.44.0"
+    },
+    {
+      "name": "missing-formula-tool",
+      "kind": "formula",
+      "classification": "missing",
+      "desired": true,
+      "installed": false,
+      "diagnostic": "Formula is declared in manifest but not installed"
+    },
+    {
+      "name": "ripgrep",
+      "kind": "formula",
+      "classification": "missing",
+      "desired": true,
+      "installed": false,
+      "diagnostic": "Formula is declared in manifest but not installed"
+    },
+    {
+      "name": "unmanaged-cli",
+      "kind": "formula",
+      "classification": "unmanaged",
+      "desired": false,
+      "installed": true,
+      "observed_version": "0.5.1",
+      "diagnostic": "Installed on system but not declared in manifest"
+    },
+    {
+      "name": "ghostty",
+      "kind": "cask",
+      "classification": "matching",
+      "desired": true,
+      "installed": true,
+      "observed_version": "1.0.0"
+    },
+    {
+      "name": "missing-gui-app",
+      "kind": "cask",
+      "classification": "missing",
+      "desired": true,
+      "installed": false,
+      "diagnostic": "Cask is declared in manifest but not installed"
+    }
+  ],
+  "config_differences": [
+    {
+      "source": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmp2KACxF/sample_local.conf",
+      "target": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmpyZYH13/.config/sample/local.conf",
+      "classification": "matching",
+      "state": "excluded",
+      "diagnostic": "Excluded by manifest rule"
+    },
+    {
+      "source": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmp2KACxF/sample_config.fish",
+      "target": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmpyZYH13/.config/sample/sample_config.fish",
+      "classification": "changed",
+      "state": "changed",
+      "source_hash": "40d53c6af9b3ac2acff22a5e13b15d2b2df17d7758c83492547d57076f600092",
+      "target_hash": "df327ef24626d77f83f72845ea060d52108d8b059f6271e15e32b97b178ae19c",
+      "diagnostic": "Target content differs from repository source (drift detected)"
+    },
+    {
+      "source": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmp2KACxF/sample_matching.conf",
+      "target": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmpyZYH13/.config/sample/sample_matching.conf",
+      "classification": "matching",
+      "state": "matching",
+      "source_hash": "7ad54488f714d52ca02e758fdc9fc3222100590ee74bcefddd9f4e152dea5b9f",
+      "target_hash": "7ad54488f714d52ca02e758fdc9fc3222100590ee74bcefddd9f4e152dea5b9f"
+    },
+    {
+      "source": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmp2KACxF/sample_missing.conf",
+      "target": "/var/folders/8f/qqm1x4b14bb_vx2013g1kmj40000gn/T/.tmpyZYH13/.config/sample/sample_missing.conf",
+      "classification": "missing",
+      "state": "missing",
+      "source_hash": "3529cf473f83c62ce0b3ace1379c548e9aa3c65bdcf6343985974d60b6ed70b8",
+      "diagnostic": "Target file does not exist on machine"
+    }
+  ],
+  "diagnostics": [],
+  "summary": {
+    "packages_matching": 2,
+    "packages_missing": 3,
+    "packages_unmanaged": 1,
+    "packages_unknown": 0,
+    "configs_matching": 2,
+    "configs_changed": 1,
+    "configs_missing": 1,
+    "configs_unknown": 0
+  }
+}

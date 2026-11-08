@@ -1,0 +1,17 @@
+# fixtures/Brewfile.dynamic
+# Contains unsupported directives and dynamic Ruby constructs
+tap "homebrew/cask-fonts"
+
+brew "git"
+
+if OS.mac?
+  cask "docker"
+  brew "coreutils"
+end
+
+mas "Xcode", id: 497799835
+whalebrew "whale"
+
+def custom_helper
+  puts "dynamic"
+end

@@ -17,3 +17,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.log
+
+# Rust build artifacts
+target/
+
