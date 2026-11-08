@@ -3,6 +3,7 @@ use dotfilesync_core::{
     Manifest, MockCommandRunner, PackageManagersSection, RunnerError, CURRENT_SCHEMA_VERSION,
 };
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[test]
 fn test_absent_homebrew_produces_diagnostic_not_missing_packages() {
@@ -223,7 +224,7 @@ fn test_command_timeout_triggers_fallback() {
             &["info", "--json=v2", "--installed"],
             Err(RunnerError::Timeout {
                 program: "brew".into(),
-                timeout_secs: 15,
+                timeout: Duration::from_secs(15),
             }),
         )
         .with_response(

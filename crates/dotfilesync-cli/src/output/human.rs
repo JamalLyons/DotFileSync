@@ -200,22 +200,47 @@ pub fn render_status_report(report: &StatusReport) -> String {
         }
     }
 
-    // Missing configs
-    let missing_configs: Vec<&ConfigDifference> = report
-        .config_differences
-        .iter()
-        .filter(|c| c.classification == DifferenceClassification::Missing)
-        .collect();
-    if !missing_configs.is_empty() {
+    // Missing configs: separate ordinary missing managed configs from intentionally local overrides
+    let mut ordinary_missing: Vec<&ConfigDifference> = Vec::new();
+    let mut absent_overrides: Vec<&ConfigDifference> = Vec::new();
+
+    for c in &report.config_differences {
+        if c.classification == DifferenceClassification::Missing {
+            if c.diagnostic
+                .as_deref()
+                .map(|d| d.contains("Machine-local override"))
+                .unwrap_or(false)
+            {
+                absent_overrides.push(c);
+            } else {
+                ordinary_missing.push(c);
+            }
+        }
+    }
+
+    if !ordinary_missing.is_empty() {
         out.push_str(&format!(
             "\nMISSING CONFIG FILES ({}):\n",
-            missing_configs.len()
+            ordinary_missing.len()
         ));
-        for c in missing_configs {
+        for c in ordinary_missing {
             out.push_str(&format!(
                 "  ✗ Target: {}\n    Source: {}\n",
                 c.target.display(),
                 c.source.display()
+            ));
+        }
+    }
+
+    if !absent_overrides.is_empty() {
+        out.push_str(&format!(
+            "\nABSENT MACHINE-LOCAL OVERRIDES (not created on this machine) ({}):\n",
+            absent_overrides.len()
+        ));
+        for c in absent_overrides {
+            out.push_str(&format!(
+                "  ○ Target: {}\n    Note:   Machine-local override is absent on this machine (intentionally local; no repository restoration required)\n",
+                c.target.display()
             ));
         }
     }

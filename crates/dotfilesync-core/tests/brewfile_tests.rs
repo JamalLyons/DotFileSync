@@ -99,10 +99,117 @@ end
 cask "app_#{ENV['ENV_TYPE']}"
 "#;
     let res = parse_brewfile(content);
+    assert!(
+        res.formulae.is_empty(),
+        "coreutils inside if block must not be imported"
+    );
+    assert!(
+        res.casks.is_empty(),
+        "interpolated cask must not be imported"
+    );
     assert!(res.unsupported_constructs.len() >= 4);
     for u in &res.unsupported_constructs {
         assert_eq!(u.construct_type, "dynamic_ruby");
     }
+}
+
+#[test]
+fn test_conditional_block_packages_not_imported_and_warned() {
+    let content = r#"
+brew "git"
+
+if OS.mac?
+  brew "coreutils"
+  cask "docker"
+end
+
+unless OS.linux?
+  brew "htop"
+end
+"#;
+    let res = parse_brewfile(content);
+    // CRITICAL: Unconditional git must be imported; conditional packages must NOT enter desired lists!
+    assert_eq!(res.formulae, vec!["git"]);
+    assert!(res.casks.is_empty());
+    assert!(!res.formulae.contains(&"coreutils".to_string()));
+    assert!(!res.formulae.contains(&"htop".to_string()));
+    assert!(!res.casks.contains(&"docker".to_string()));
+
+    // Must emit warnings specifically for skipped conditional packages
+    assert!(res
+        .diagnostics
+        .iter()
+        .any(|d| d.message.contains("coreutils")));
+    assert!(res.diagnostics.iter().any(|d| d.message.contains("docker")));
+    assert!(res.diagnostics.iter().any(|d| d.message.contains("htop")));
+
+    // Must record unsupported constructs
+    assert!(res
+        .unsupported_constructs
+        .iter()
+        .any(|u| u.raw_line.contains("coreutils")));
+    assert!(res
+        .unsupported_constructs
+        .iter()
+        .any(|u| u.raw_line.contains("docker")));
+    assert!(res
+        .unsupported_constructs
+        .iter()
+        .any(|u| u.raw_line.contains("htop")));
+}
+
+#[test]
+fn test_trailing_conditional_modifiers_not_imported_and_warned() {
+    let content = r#"
+brew "wget", args: ["with-iri"] if OS.mac?
+cask "docker" unless OS.linux?
+brew "curl" if condition
+"#;
+    let res = parse_brewfile(content);
+    assert!(
+        res.formulae.is_empty(),
+        "Conditional brew declarations must not be imported"
+    );
+    assert!(
+        res.casks.is_empty(),
+        "Conditional cask declarations must not be imported"
+    );
+
+    // Warnings must be emitted
+    assert!(res.diagnostics.iter().any(|d| d.message.contains("wget")));
+    assert!(res.diagnostics.iter().any(|d| d.message.contains("docker")));
+    assert!(res.diagnostics.iter().any(|d| d.message.contains("curl")));
+
+    // Unsupported constructs must be recorded with dynamic_ruby type
+    assert_eq!(res.unsupported_constructs.len(), 3);
+    for u in &res.unsupported_constructs {
+        assert_eq!(u.construct_type, "dynamic_ruby");
+        assert!(u.reason.contains("conditional"));
+    }
+}
+
+#[test]
+fn test_nested_ruby_blocks_handled_conservatively() {
+    let content = r#"
+if OS.mac?
+  if Hardware::CPU.arm?
+    brew "arm-tool"
+  end
+  brew "intel-tool"
+end
+"#;
+    let res = parse_brewfile(content);
+    assert!(res.formulae.is_empty());
+    assert!(!res.formulae.contains(&"arm-tool".to_string()));
+    assert!(!res.formulae.contains(&"intel-tool".to_string()));
+    assert!(res
+        .diagnostics
+        .iter()
+        .any(|d| d.message.contains("arm-tool")));
+    assert!(res
+        .diagnostics
+        .iter()
+        .any(|d| d.message.contains("intel-tool")));
 }
 
 #[test]

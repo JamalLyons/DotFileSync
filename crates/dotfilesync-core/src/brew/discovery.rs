@@ -1,7 +1,8 @@
 use serde_json::Value;
+use std::path::Path;
 
 use super::model::{BrewDiscoveryResult, ObservedPackage, PackageKind};
-use super::runner::CommandRunner;
+use super::runner::{CommandOutput, CommandRunner, RunnerError};
 use crate::diagnostic::Diagnostic;
 
 pub fn discover_homebrew(runner: &dyn CommandRunner) -> BrewDiscoveryResult {
@@ -21,9 +22,8 @@ pub fn discover_homebrew(runner: &dyn CommandRunner) -> BrewDiscoveryResult {
     result.available = true;
     result.brew_path = Some(brew_path.clone());
 
-    // 2. Query brew version
-    let brew_prog = brew_path.to_string_lossy();
-    match runner.run(&brew_prog, &["--version"]) {
+    // 2. Query brew version (using native Path without lossy conversion)
+    match run_brew_command(runner, &brew_path, &["--version"]) {
         Ok(out) => {
             let first_line = out.stdout.lines().next().unwrap_or("").trim().to_string();
             if !first_line.is_empty() {
@@ -40,7 +40,7 @@ pub fn discover_homebrew(runner: &dyn CommandRunner) -> BrewDiscoveryResult {
 
     // 3. Query installed packages
     // Prefer `brew info --json=v2 --installed`, with fallback to `brew list --versions`
-    match query_packages_json(runner, &brew_prog) {
+    match query_packages_json(runner, &brew_path) {
         Ok((formulae, casks)) => {
             result.packages_enumerated = true;
             result.formulae = formulae;
@@ -49,7 +49,7 @@ pub fn discover_homebrew(runner: &dyn CommandRunner) -> BrewDiscoveryResult {
         }
         Err(json_err) => {
             // Attempt fallback to `brew list --versions`
-            match query_packages_list(runner, &brew_prog) {
+            match query_packages_list(runner, &brew_path) {
                 Ok((formulae, casks)) => {
                     result.packages_enumerated = true;
                     result.formulae = formulae;
@@ -78,12 +78,25 @@ pub fn discover_homebrew(runner: &dyn CommandRunner) -> BrewDiscoveryResult {
     result
 }
 
+fn run_brew_command(
+    runner: &dyn CommandRunner,
+    brew_path: &Path,
+    args: &[&str],
+) -> Result<CommandOutput, RunnerError> {
+    if let Some(prog) = brew_path.to_str() {
+        runner.run(prog, args)
+    } else {
+        let os_args: Vec<&std::ffi::OsStr> =
+            args.iter().copied().map(std::ffi::OsStr::new).collect();
+        runner.run_path(brew_path, &os_args)
+    }
+}
+
 fn query_packages_json(
     runner: &dyn CommandRunner,
-    brew_prog: &str,
+    brew_path: &Path,
 ) -> Result<(Vec<ObservedPackage>, Vec<ObservedPackage>), String> {
-    let out = runner
-        .run(brew_prog, &["info", "--json=v2", "--installed"])
+    let out = run_brew_command(runner, brew_path, &["info", "--json=v2", "--installed"])
         .map_err(|e| e.to_string())?;
 
     let v: Value = serde_json::from_str(&out.stdout)
@@ -155,16 +168,14 @@ fn query_packages_json(
 
 fn query_packages_list(
     runner: &dyn CommandRunner,
-    brew_prog: &str,
+    brew_path: &Path,
 ) -> Result<(Vec<ObservedPackage>, Vec<ObservedPackage>), String> {
-    let formula_out = runner
-        .run(brew_prog, &["list", "--versions", "--formula"])
+    let formula_out = run_brew_command(runner, brew_path, &["list", "--versions", "--formula"])
         .map_err(|e| format!("'brew list --versions --formula' failed: {e}"))?;
 
     let mut formulae = parse_list_versions_output(&formula_out.stdout, PackageKind::Formula);
 
-    let cask_out = runner
-        .run(brew_prog, &["list", "--versions", "--cask"])
+    let cask_out = run_brew_command(runner, brew_path, &["list", "--versions", "--cask"])
         .map_err(|e| format!("'brew list --versions --cask' failed: {e}"))?;
 
     let mut casks = parse_list_versions_output(&cask_out.stdout, PackageKind::Cask);

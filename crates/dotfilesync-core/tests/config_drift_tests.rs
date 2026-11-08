@@ -385,3 +385,137 @@ fn test_missing_source_in_repo() {
     let observed = inspector.inspect_file(&file);
     assert_eq!(observed.state, ConfigFileState::SourceMissing);
 }
+
+#[cfg(unix)]
+#[test]
+fn test_non_utf8_configuration_paths_preserve_native_values() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let repo_temp = tempdir().unwrap();
+    let home_temp = tempdir().unwrap();
+
+    let non_utf8_sub = OsStr::from_bytes(b"non_utf8_\xff_conf");
+    let non_utf8_target_path = home_temp.path().join(non_utf8_sub);
+
+    // Test on platforms allowing non-UTF-8 file creation (Linux)
+    match fs::write(&non_utf8_target_path, "KEY=123\n") {
+        Ok(()) => {
+            let src = repo_temp.path().join("source.conf");
+            fs::write(&src, "KEY=123\n").unwrap();
+
+            let exclusions = ExclusionsSection::default();
+            let overrides = Vec::new();
+            let inspector =
+                ConfigInspector::new(repo_temp.path(), home_temp.path(), &exclusions, &overrides);
+
+            let tracked = TrackedFile {
+                source: "source.conf".into(),
+                target: non_utf8_target_path.to_string_lossy().to_string(),
+                machine_local: false,
+                description: None,
+            };
+
+            let obs = inspector.inspect_file(&tracked);
+            // Native path bytes must be preserved
+            assert_eq!(obs.source_path, src);
+            assert!(obs.target_hash.is_some());
+        }
+        Err(e) if e.raw_os_error() == Some(92) || e.kind() == std::io::ErrorKind::InvalidInput => {
+            // APFS rejected creation with EILSEQ (Errno 92).
+            // Verify path preservation in memory without lossy string corruption
+            let non_utf8_base = std::path::Path::new(OsStr::from_bytes(b"/repo/\xff/base"));
+            let resolved = dotfilesync_core::resolve_source_path("config.fish", non_utf8_base);
+            assert_eq!(
+                resolved.as_os_str().as_bytes(),
+                b"/repo/\xff/base/config.fish"
+            );
+
+            let non_utf8_home = std::path::Path::new(OsStr::from_bytes(b"/home/\xfe/user"));
+            let expanded =
+                dotfilesync_core::expand_target_path("~/.config/test.conf", non_utf8_home);
+            assert_eq!(
+                expanded.as_os_str().as_bytes(),
+                b"/home/\xfe/user/.config/test.conf"
+            );
+        }
+        Err(other) => panic!("Unexpected filesystem error: {other}"),
+    }
+}
+
+#[test]
+fn test_absent_machine_local_override_is_distinguishable_from_ordinary_missing() {
+    let repo_temp = tempdir().unwrap();
+    let home_temp = tempdir().unwrap();
+
+    let repo_root = repo_temp.path();
+    let home_dir = home_temp.path();
+
+    // Ordinary source exists in repo
+    let ordinary_src = repo_root.join("ordinary_missing.conf");
+    fs::write(&ordinary_src, "managed_content = true\n").unwrap();
+
+    let mut manifest = Manifest::new(CURRENT_SCHEMA_VERSION);
+    manifest.files = vec![
+        TrackedFile {
+            source: "ordinary_missing.conf".into(),
+            target: "~/.config/ordinary_missing.conf".into(),
+            machine_local: false,
+            description: None,
+        },
+        TrackedFile {
+            source: "fish/conf.d/local.fish".into(),
+            target: "~/.config/fish/conf.d/local.fish".into(),
+            machine_local: true,
+            description: None,
+        },
+    ];
+
+    let inspector = ConfigInspector::new(
+        repo_root,
+        home_dir,
+        &manifest.exclusions,
+        &manifest.overrides,
+    );
+    let configs = inspector.inspect_files(&manifest.files);
+
+    // Verify inspector results:
+    // 1. Ordinary missing: target does not exist, but source exists and was hashed
+    assert_eq!(configs[0].state, ConfigFileState::Missing);
+    assert!(configs[0].source_hash.is_some());
+    assert!(configs[0].target_hash.is_none());
+
+    // 2. Absent machine-local override:
+    // Intentionally local: source and target are NEVER read or hashed!
+    assert_eq!(configs[1].state, ConfigFileState::Missing);
+    assert!(configs[1].source_hash.is_none());
+    assert!(configs[1].target_hash.is_none());
+    assert!(configs[1]
+        .diagnostic
+        .as_ref()
+        .unwrap()
+        .contains("Machine-local override"));
+
+    let brew_result = BrewDiscoveryResult {
+        available: true,
+        packages_enumerated: true,
+        ..Default::default()
+    };
+    let report = compare_status(&manifest, &brew_result, &configs);
+
+    assert_eq!(report.summary.configs_missing, 2);
+    let diff_ordinary = report
+        .config_differences
+        .iter()
+        .find(|c| c.target.ends_with("ordinary_missing.conf"))
+        .unwrap();
+    let diff_local = report
+        .config_differences
+        .iter()
+        .find(|c| c.target.ends_with("local.fish"))
+        .unwrap();
+
+    assert!(diff_ordinary.source_hash.is_some());
+    assert!(diff_local.source_hash.is_none());
+    assert!(diff_local.target_hash.is_none());
+}

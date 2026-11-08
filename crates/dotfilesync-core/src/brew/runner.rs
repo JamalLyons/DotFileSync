@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -22,8 +23,8 @@ pub enum RunnerError {
     #[error("Command '{program}' failed to execute: {message}")]
     ExecutionFailed { program: String, message: String },
 
-    #[error("Command '{program}' timed out after {timeout_secs}s")]
-    Timeout { program: String, timeout_secs: u64 },
+    #[error("Command '{program}' timed out after {}", format_timeout(*.timeout))]
+    Timeout { program: String, timeout: Duration },
 
     #[error("Command '{program}' exited with code {code}: {stderr}")]
     NonZeroExit {
@@ -33,8 +34,25 @@ pub enum RunnerError {
     },
 }
 
+pub fn format_timeout(timeout: Duration) -> String {
+    let millis = timeout.as_millis();
+    if millis < 1000 {
+        format!("{millis}ms")
+    } else if timeout.subsec_millis() == 0 {
+        format!("{}s", timeout.as_secs())
+    } else {
+        format!("{:.2}s", timeout.as_secs_f64())
+    }
+}
+
 pub trait CommandRunner: Send + Sync {
-    fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, RunnerError>;
+    fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, RunnerError> {
+        let os_args: Vec<&OsStr> = args.iter().copied().map(OsStr::new).collect();
+        self.run_path(Path::new(program), &os_args)
+    }
+
+    fn run_path(&self, program: &Path, args: &[&OsStr]) -> Result<CommandOutput, RunnerError>;
+
     fn find_executable(&self, name: &str) -> Option<PathBuf>;
 }
 
@@ -75,7 +93,7 @@ impl CommandRunner for RealCommandRunner {
                     return Some(override_path.clone());
                 }
             }
-            if let Ok(env_path) = std::env::var("DOTFILESYNC_BREW_BIN") {
+            if let Some(env_path) = std::env::var_os("DOTFILESYNC_BREW_BIN") {
                 let p = PathBuf::from(env_path);
                 if p.is_file() {
                     return Some(p);
@@ -83,8 +101,8 @@ impl CommandRunner for RealCommandRunner {
             }
         }
 
-        // First check standard PATH lookup
-        if let Ok(path_var) = std::env::var("PATH") {
+        // Check standard PATH lookup, preserving native non-UTF-8 paths
+        if let Some(path_var) = std::env::var_os("PATH") {
             for dir in std::env::split_paths(&path_var) {
                 let candidate = dir.join(name);
                 if candidate.is_file() {
@@ -108,39 +126,66 @@ impl CommandRunner for RealCommandRunner {
     }
 
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, RunnerError> {
-        let exec_path = self
-            .find_executable(program)
-            .unwrap_or_else(|| PathBuf::from(program));
+        let os_args: Vec<&OsStr> = args.iter().copied().map(OsStr::new).collect();
+        self.run_path(Path::new(program), &os_args)
+    }
 
-        let mut child = Command::new(&exec_path)
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    RunnerError::ExecutableNotFound(program.to_string())
-                } else {
-                    RunnerError::ExecutionFailed {
-                        program: program.to_string(),
-                        message: e.to_string(),
-                    }
+    fn run_path(&self, program: &Path, args: &[&OsStr]) -> Result<CommandOutput, RunnerError> {
+        let exec_path = if let Some(prog_str) = program.to_str() {
+            self.find_executable(prog_str)
+                .unwrap_or_else(|| program.to_path_buf())
+        } else {
+            program.to_path_buf()
+        };
+
+        let mut cmd = Command::new(&exec_path);
+        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        // On Unix, spawn in a separate process group so timeout cleanup terminates
+        // the spawned command and all its descendants without affecting unrelated processes.
+        // Limitation: descendants that explicitly detach via setsid()/setpgid() are outside
+        // this process group and cannot be reached by group signal termination.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+
+        let mut child = cmd.spawn().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                RunnerError::ExecutableNotFound(program.display().to_string())
+            } else {
+                RunnerError::ExecutionFailed {
+                    program: program.display().to_string(),
+                    message: e.to_string(),
                 }
-            })?;
+            }
+        })?;
+
+        let pid = child.id();
+        let program_display = program.display().to_string();
+
+        let kill_all = |child: &mut std::process::Child| {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+            }
+            let _ = child.kill();
+        };
 
         // Drain stdout and stderr while process runs to prevent pipe buffer deadlocks
         let mut stdout_pipe = child
             .stdout
             .take()
             .ok_or_else(|| RunnerError::ExecutionFailed {
-                program: program.to_string(),
+                program: program_display.clone(),
                 message: "Failed to capture stdout pipe".to_string(),
             })?;
         let mut stderr_pipe = child
             .stderr
             .take()
             .ok_or_else(|| RunnerError::ExecutionFailed {
-                program: program.to_string(),
+                program: program_display.clone(),
                 message: "Failed to capture stderr pipe".to_string(),
             })?;
 
@@ -156,17 +201,50 @@ impl CommandRunner for RealCommandRunner {
             (bytes, res)
         });
 
+        let start_time = std::time::Instant::now();
+
         match child.wait_timeout(self.timeout) {
             Ok(Some(status)) => {
+                // Direct child exited within timeout.
+                // Wait for output-reader threads, bounded by overall call deadline to prevent
+                // lingering descendants from keeping pipes open indefinitely.
+                let elapsed = start_time.elapsed();
+                if elapsed >= self.timeout {
+                    kill_all(&mut child);
+                    let _ = child.wait();
+                    let _ = stdout_handle.join();
+                    let _ = stderr_handle.join();
+                    return Err(RunnerError::Timeout {
+                        program: program_display,
+                        timeout: self.timeout,
+                    });
+                }
+
+                let remaining = self.timeout - elapsed;
+                let reader_start = std::time::Instant::now();
+                while !stdout_handle.is_finished() || !stderr_handle.is_finished() {
+                    if reader_start.elapsed() >= remaining {
+                        kill_all(&mut child);
+                        let _ = child.wait();
+                        let _ = stdout_handle.join();
+                        let _ = stderr_handle.join();
+                        return Err(RunnerError::Timeout {
+                            program: program_display,
+                            timeout: self.timeout,
+                        });
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+
                 let (stdout_bytes, stdout_res) =
                     stdout_handle
                         .join()
                         .map_err(|_| RunnerError::ExecutionFailed {
-                            program: program.to_string(),
+                            program: program_display.clone(),
                             message: "Stdout reader thread panicked".to_string(),
                         })?;
                 stdout_res.map_err(|e| RunnerError::ExecutionFailed {
-                    program: program.to_string(),
+                    program: program_display.clone(),
                     message: format!("Failed reading stdout: {e}"),
                 })?;
 
@@ -174,11 +252,11 @@ impl CommandRunner for RealCommandRunner {
                     stderr_handle
                         .join()
                         .map_err(|_| RunnerError::ExecutionFailed {
-                            program: program.to_string(),
+                            program: program_display.clone(),
                             message: "Stderr reader thread panicked".to_string(),
                         })?;
                 stderr_res.map_err(|e| RunnerError::ExecutionFailed {
-                    program: program.to_string(),
+                    program: program_display.clone(),
                     message: format!("Failed reading stderr: {e}"),
                 })?;
 
@@ -188,7 +266,7 @@ impl CommandRunner for RealCommandRunner {
 
                 if !status.success() {
                     Err(RunnerError::NonZeroExit {
-                        program: program.to_string(),
+                        program: program_display,
                         code,
                         stderr,
                     })
@@ -201,23 +279,23 @@ impl CommandRunner for RealCommandRunner {
                 }
             }
             Ok(None) => {
-                // Timed out, terminate child process
-                let _ = child.kill();
+                // Command wait timed out: kill process group, reap child, and join reader threads
+                kill_all(&mut child);
                 let _ = child.wait();
                 let _ = stdout_handle.join();
                 let _ = stderr_handle.join();
                 Err(RunnerError::Timeout {
-                    program: program.to_string(),
-                    timeout_secs: self.timeout.as_secs(),
+                    program: program_display,
+                    timeout: self.timeout,
                 })
             }
             Err(e) => {
-                let _ = child.kill();
+                kill_all(&mut child);
                 let _ = child.wait();
                 let _ = stdout_handle.join();
                 let _ = stderr_handle.join();
                 Err(RunnerError::ExecutionFailed {
-                    program: program.to_string(),
+                    program: program_display,
                     message: e.to_string(),
                 })
             }
@@ -280,6 +358,23 @@ impl CommandRunner for MockCommandRunner {
             res.clone()
         } else {
             Err(RunnerError::ExecutableNotFound(program.to_string()))
+        }
+    }
+
+    fn run_path(&self, program: &Path, args: &[&OsStr]) -> Result<CommandOutput, RunnerError> {
+        let prog_str = program.to_string_lossy().to_string();
+        let args_vec: Vec<String> = args
+            .iter()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        let key = (prog_str, args_vec);
+        let map = self.canned_responses.lock().unwrap();
+        if let Some(res) = map.get(&key) {
+            res.clone()
+        } else {
+            Err(RunnerError::ExecutableNotFound(
+                program.display().to_string(),
+            ))
         }
     }
 }
