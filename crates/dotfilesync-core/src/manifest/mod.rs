@@ -40,6 +40,12 @@ pub fn parse_manifest(content: &str) -> Result<Manifest, ManifestError> {
     Ok(manifest)
 }
 
+/// Loads and validates a manifest from disk.
+///
+/// Manifest Representational Limits:
+/// Manifest files are required to be valid UTF-8 text per the TOML specification. If the manifest
+/// file on disk contains non-UTF-8 bytes, `load_manifest` explicitly rejects it with a
+/// `ManifestError::Io` error containing `std::io::ErrorKind::InvalidData`.
 pub fn load_manifest(path: impl AsRef<Path>) -> Result<Manifest, ManifestError> {
     let path = path.as_ref();
     let content = fs::read_to_string(path).map_err(|source| ManifestError::Io {
@@ -54,6 +60,9 @@ pub fn serialize_manifest(manifest: &Manifest) -> Result<String, ManifestError> 
 }
 
 /// Expands leading `~` to the provided home directory or environment HOME.
+///
+/// If `home_dir` contains native non-UTF-8 bytes, those bytes are preserved intact
+/// in the resulting `PathBuf` without lossy conversion.
 pub fn expand_target_path(target: &str, home_dir: &Path) -> PathBuf {
     if let Some(stripped) = target.strip_prefix("~/") {
         home_dir.join(stripped)
@@ -65,6 +74,9 @@ pub fn expand_target_path(target: &str, home_dir: &Path) -> PathBuf {
 }
 
 /// Resolves a source path relative to the repository / manifest base directory.
+///
+/// If `base_dir` contains native non-UTF-8 bytes, those bytes are preserved intact
+/// in the resulting `PathBuf` without lossy conversion.
 pub fn resolve_source_path(source: &str, base_dir: &Path) -> PathBuf {
     base_dir.join(source)
 }

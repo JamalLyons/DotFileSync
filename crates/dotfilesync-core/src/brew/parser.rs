@@ -399,27 +399,38 @@ fn is_word_boundary(c: char) -> bool {
 
 fn is_block_starter(code: &str) -> Option<&'static str> {
     let block_keywords = [
-        ("if", &["if ", "if("][..]),
-        ("unless", &["unless ", "unless("][..]),
-        ("case", &["case ", "case("][..]),
-        ("while", &["while ", "while("][..]),
-        ("until", &["until ", "until("][..]),
-        ("for", &["for "][..]),
-        ("begin", &["begin", "begin "][..]),
-        ("def", &["def "][..]),
-        ("class", &["class "][..]),
-        ("module", &["module "][..]),
+        "if", "unless", "case", "while", "until", "for", "begin", "def", "class", "module",
     ];
 
-    for (name, prefixes) in block_keywords {
-        for prefix in prefixes {
-            if code == *prefix || code.starts_with(prefix) {
-                return Some(name);
+    for &kw in &block_keywords {
+        if let Some(rest) = code.strip_prefix(kw) {
+            let is_boundary = if rest.is_empty() {
+                matches!(kw, "begin" | "case")
+            } else {
+                let first_char = rest.chars().next().unwrap();
+                match kw {
+                    "begin" => first_char.is_whitespace() || first_char == ';',
+                    "if" | "unless" | "case" | "while" | "until" | "for" => {
+                        first_char.is_whitespace() || matches!(first_char, '(' | ';')
+                    }
+                    "def" => first_char.is_whitespace() || first_char == '(',
+                    "class" => first_char.is_whitespace() || matches!(first_char, '<' | ';'),
+                    "module" => first_char.is_whitespace() || first_char == ';',
+                    _ => false,
+                }
+            };
+
+            if is_boundary {
+                return Some(kw);
             }
         }
     }
 
-    if code.ends_with(" do") || code.contains(" do |") || code.ends_with(" do|") {
+    if code.ends_with(" do")
+        || code.contains(" do |")
+        || code.ends_with(" do|")
+        || code.ends_with(" do;")
+    {
         return Some("do");
     }
 
@@ -427,20 +438,30 @@ fn is_block_starter(code: &str) -> Option<&'static str> {
 }
 
 fn is_block_ender(code: &str) -> bool {
-    code == "end" || code.starts_with("end ") || code.starts_with("end;")
+    if let Some(rest) = code.strip_prefix("end") {
+        rest.is_empty() || rest.starts_with(|c: char| c.is_whitespace() || c == ';')
+    } else {
+        false
+    }
 }
 
 fn is_block_continuation(code: &str) -> bool {
-    code == "else"
-        || code.starts_with("else ")
-        || code.starts_with("elsif ")
-        || code.starts_with("elsif(")
-        || code == "when"
-        || code.starts_with("when ")
-        || code.starts_with("rescue ")
-        || code == "rescue"
-        || code.starts_with("ensure ")
-        || code == "ensure"
+    let continuation_keywords = ["else", "elsif", "when", "rescue", "ensure"];
+    for &kw in &continuation_keywords {
+        if let Some(rest) = code.strip_prefix(kw) {
+            let is_boundary = if rest.is_empty() {
+                true
+            } else {
+                let first_char = rest.chars().next().unwrap();
+                first_char.is_whitespace() || matches!(first_char, '(' | ';' | ':')
+            };
+
+            if is_boundary {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Determines whether a line (with comments stripped) is a dynamic Ruby keyword or control statement.
@@ -650,5 +671,22 @@ whalebrew "whale"
             res.unsupported_constructs[5].construct_type,
             "bundle_extension"
         );
+    }
+
+    #[test]
+    fn test_keyword_prefix_variable_does_not_suppress_following_brew_declaration() {
+        // 'beginner = true' must not match 'begin' block starter and suppress 'brew "git"'
+        let input = r#"
+beginner = true
+definitely_true = 1
+format = :json
+brew "git"
+"#;
+        let res = parse_brewfile(input);
+        assert_eq!(res.formulae, vec!["git"]);
+        // Non-brew/cask statements are flagged as unrecognized, not dynamic_ruby block starters
+        for u in &res.unsupported_constructs {
+            assert_eq!(u.construct_type, "unrecognized");
+        }
     }
 }

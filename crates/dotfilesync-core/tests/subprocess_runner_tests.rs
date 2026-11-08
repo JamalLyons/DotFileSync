@@ -184,6 +184,158 @@ p.wait()
 
 #[cfg(unix)]
 #[test]
+fn test_real_runner_parent_exits_first_detached_descendant_holding_stdout() {
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    struct ProcessCleanupGuard {
+        pid_file: PathBuf,
+    }
+
+    impl Drop for ProcessCleanupGuard {
+        fn drop(&mut self) {
+            if let Ok(content) = std::fs::read_to_string(&self.pid_file) {
+                if let Ok(pid) = content.trim().parse::<i32>() {
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                }
+            }
+        }
+    }
+
+    let temp_dir = tempdir().unwrap();
+    let pid_file = temp_dir.path().join("grandchild_stdout.pid");
+    let _guard = ProcessCleanupGuard {
+        pid_file: pid_file.clone(),
+    };
+
+    let script = format!(
+        r#"
+import os, sys, time
+pid_file = {:?}
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    with open(pid_file, 'w') as f:
+        f.write(str(os.getpid()) + '\n')
+        f.flush()
+    sys.stderr.close()
+    time.sleep(3)
+    sys.exit(0)
+while not (os.path.exists(pid_file) and os.path.getsize(pid_file) > 0):
+    time.sleep(0.005)
+sys.exit(0)
+"#,
+        pid_file.to_str().unwrap()
+    );
+
+    let timeout = Duration::from_millis(400);
+    let runner = RealCommandRunner::new(timeout);
+    let start = Instant::now();
+
+    let res = runner.run("python3", &["-c", &script]);
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed >= Duration::from_millis(350),
+        "Elapsed time too short: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(2000),
+        "Full call must be bounded by deadline even when parent exits first and detached descendant holds stdout: took {elapsed:?}"
+    );
+
+    match res {
+        Err(RunnerError::Timeout {
+            program,
+            timeout: err_timeout,
+        }) => {
+            assert_eq!(program, "python3");
+            assert_eq!(err_timeout, timeout);
+        }
+        other => panic!("Expected Timeout error, got: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_real_runner_parent_exits_first_detached_descendant_holding_stderr() {
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    struct ProcessCleanupGuard {
+        pid_file: PathBuf,
+    }
+
+    impl Drop for ProcessCleanupGuard {
+        fn drop(&mut self) {
+            if let Ok(content) = std::fs::read_to_string(&self.pid_file) {
+                if let Ok(pid) = content.trim().parse::<i32>() {
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                }
+            }
+        }
+    }
+
+    let temp_dir = tempdir().unwrap();
+    let pid_file = temp_dir.path().join("grandchild_stderr.pid");
+    let _guard = ProcessCleanupGuard {
+        pid_file: pid_file.clone(),
+    };
+
+    let script = format!(
+        r#"
+import os, sys, time
+pid_file = {:?}
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    with open(pid_file, 'w') as f:
+        f.write(str(os.getpid()) + '\n')
+        f.flush()
+    sys.stdout.close()
+    time.sleep(3)
+    sys.exit(0)
+while not (os.path.exists(pid_file) and os.path.getsize(pid_file) > 0):
+    time.sleep(0.005)
+sys.exit(0)
+"#,
+        pid_file.to_str().unwrap()
+    );
+
+    let timeout = Duration::from_millis(400);
+    let runner = RealCommandRunner::new(timeout);
+    let start = Instant::now();
+
+    let res = runner.run("python3", &["-c", &script]);
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed >= Duration::from_millis(350),
+        "Elapsed time too short: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(2000),
+        "Full call must be bounded by deadline even when parent exits first and detached descendant holds stderr: took {elapsed:?}"
+    );
+
+    match res {
+        Err(RunnerError::Timeout {
+            program,
+            timeout: err_timeout,
+        }) => {
+            assert_eq!(program, "python3");
+            assert_eq!(err_timeout, timeout);
+        }
+        other => panic!("Expected Timeout error, got: {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn test_real_runner_non_utf8_executable_path() {
     use std::ffi::OsStr;
     use std::fs;

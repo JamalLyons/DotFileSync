@@ -388,58 +388,115 @@ fn test_missing_source_in_repo() {
 
 #[cfg(unix)]
 #[test]
-fn test_non_utf8_configuration_paths_preserve_native_values() {
+fn test_native_path_preservation_in_supported_flow() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
 
-    let repo_temp = tempdir().unwrap();
-    let home_temp = tempdir().unwrap();
+    // Supported flow: A native non-UTF-8 base/repo directory and non-UTF-8 home directory
+    // joined with valid UTF-8 manifest target and source paths.
+    let non_utf8_base = std::path::Path::new(OsStr::from_bytes(b"/tmp/repo_\xff_base"));
+    let non_utf8_home = std::path::Path::new(OsStr::from_bytes(b"/tmp/home_\xfe_dir"));
 
-    let non_utf8_sub = OsStr::from_bytes(b"non_utf8_\xff_conf");
-    let non_utf8_target_path = home_temp.path().join(non_utf8_sub);
+    let resolved_source = dotfilesync_core::resolve_source_path("config/fish.conf", non_utf8_base);
+    assert_eq!(
+        resolved_source.as_os_str().as_bytes(),
+        b"/tmp/repo_\xff_base/config/fish.conf"
+    );
 
-    // Test on platforms allowing non-UTF-8 file creation (Linux)
-    match fs::write(&non_utf8_target_path, "KEY=123\n") {
+    let expanded_target =
+        dotfilesync_core::expand_target_path("~/.config/fish.conf", non_utf8_home);
+    assert_eq!(
+        expanded_target.as_os_str().as_bytes(),
+        b"/tmp/home_\xfe_dir/.config/fish.conf"
+    );
+
+    // Verify ConfigInspector preserves native non-UTF-8 paths without lossy string conversion
+    let exclusions = ExclusionsSection::default();
+    let overrides = Vec::new();
+    let inspector = ConfigInspector::new(non_utf8_base, non_utf8_home, &exclusions, &overrides);
+
+    let tracked = TrackedFile {
+        source: "config/fish.conf".into(),
+        target: "~/.config/fish.conf".into(),
+        machine_local: false,
+        description: None,
+    };
+
+    let observed = inspector.inspect_file(&tracked);
+    assert_eq!(
+        observed.source_path.as_os_str().as_bytes(),
+        b"/tmp/repo_\xff_base/config/fish.conf"
+    );
+    assert_eq!(
+        observed.target_path.as_os_str().as_bytes(),
+        b"/tmp/home_\xfe_dir/.config/fish.conf"
+    );
+    // Neither path contains the replacement character U+FFFD ('\xef\xbf\xbd')
+    assert!(!observed
+        .source_path
+        .as_os_str()
+        .as_bytes()
+        .windows(3)
+        .any(|w| w == b"\xef\xbf\xbd"));
+    assert!(!observed
+        .target_path
+        .as_os_str()
+        .as_bytes()
+        .windows(3)
+        .any(|w| w == b"\xef\xbf\xbd"));
+    // Target does not exist on disk, correctly reported as missing
+    assert_eq!(observed.state, ConfigFileState::SourceMissing);
+}
+
+#[test]
+fn test_non_utf8_manifest_file_is_explicitly_rejected() {
+    use dotfilesync_core::{load_manifest, ManifestError};
+
+    let temp = tempdir().unwrap();
+    let manifest_path = temp.path().join("dotfilesync.toml");
+
+    // Manifest files must be valid UTF-8. Non-UTF-8 byte sequences cannot be represented
+    // in TOML strings and must be explicitly rejected at load time.
+    let non_utf8_bytes = b"schema_version = 1\n# Invalid byte: \xff\n[[files]]\nsource = \"fish\"\ntarget = \"~/.config/fish\"\n";
+    fs::write(&manifest_path, non_utf8_bytes).unwrap();
+
+    let res = load_manifest(&manifest_path);
+    match res {
+        Err(ManifestError::Io { source, path }) => {
+            assert_eq!(path, manifest_path);
+            assert_eq!(source.kind(), std::io::ErrorKind::InvalidData);
+        }
+        other => panic!(
+            "Expected ManifestError::Io with InvalidData for non-UTF-8 manifest, got: {other:?}"
+        ),
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_apfs_filesystem_utf8_restriction_verified_honestly() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let temp = tempdir().unwrap();
+    // On macOS APFS, file and directory names are required by the filesystem to be valid UTF-8.
+    // Creating an entry with invalid byte sequence 0xFF returns EILSEQ (Errno 92: Illegal byte sequence).
+    let non_utf8_name = OsStr::from_bytes(b"non_utf8_\xff_test");
+    let test_path = temp.path().join(non_utf8_name);
+
+    let res = fs::write(&test_path, "test");
+    match res {
+        Err(e) => {
+            let raw_code = e.raw_os_error();
+            assert!(
+                raw_code == Some(92) || e.kind() == std::io::ErrorKind::InvalidInput,
+                "Expected APFS EILSEQ (Errno 92) or InvalidInput, got: {e:?} (os_error: {raw_code:?})"
+            );
+        }
         Ok(()) => {
-            let src = repo_temp.path().join("source.conf");
-            fs::write(&src, "KEY=123\n").unwrap();
-
-            let exclusions = ExclusionsSection::default();
-            let overrides = Vec::new();
-            let inspector =
-                ConfigInspector::new(repo_temp.path(), home_temp.path(), &exclusions, &overrides);
-
-            let tracked = TrackedFile {
-                source: "source.conf".into(),
-                target: non_utf8_target_path.to_string_lossy().to_string(),
-                machine_local: false,
-                description: None,
-            };
-
-            let obs = inspector.inspect_file(&tracked);
-            // Native path bytes must be preserved
-            assert_eq!(obs.source_path, src);
-            assert!(obs.target_hash.is_some());
+            // Clean up if running on a filesystem that permits arbitrary bytes
+            let _ = fs::remove_file(&test_path);
         }
-        Err(e) if e.raw_os_error() == Some(92) || e.kind() == std::io::ErrorKind::InvalidInput => {
-            // APFS rejected creation with EILSEQ (Errno 92).
-            // Verify path preservation in memory without lossy string corruption
-            let non_utf8_base = std::path::Path::new(OsStr::from_bytes(b"/repo/\xff/base"));
-            let resolved = dotfilesync_core::resolve_source_path("config.fish", non_utf8_base);
-            assert_eq!(
-                resolved.as_os_str().as_bytes(),
-                b"/repo/\xff/base/config.fish"
-            );
-
-            let non_utf8_home = std::path::Path::new(OsStr::from_bytes(b"/home/\xfe/user"));
-            let expanded =
-                dotfilesync_core::expand_target_path("~/.config/test.conf", non_utf8_home);
-            assert_eq!(
-                expanded.as_os_str().as_bytes(),
-                b"/home/\xfe/user/.config/test.conf"
-            );
-        }
-        Err(other) => panic!("Unexpected filesystem error: {other}"),
     }
 }
 

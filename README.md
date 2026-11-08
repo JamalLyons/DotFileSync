@@ -170,7 +170,7 @@ Apache-2.0
 
 ## dotfilesync (Rust Environment Manager)
 
-`dotfilesync` is the macOS-first developer environment manager written in Rust, laying the foundation for a future GPUI-based environment manager. In this first milestone, `dotfilesync` provides a safe, read-only CLI and core domain library for discovering system state, tracking explicit configuration files, and detecting drift without modifying your system.
+`dotfilesync` is the macOS-first developer environment manager written in Rust, laying the foundation for a future GPUI-based environment manager. In this first milestone, `dotfilesync` provides read-only inspection commands (`scan`, `status`) and a safe Brewfile importer (`import-brewfile`) that creates new manifest files without modifying existing system configurations or tracking repositories.
 
 ### Architecture
 
@@ -249,12 +249,12 @@ Key capabilities:
 ### Existing Behaviors Preserved
 
 - **Bash Installer (`setup.sh`)**: The existing Bash bootstrapper, `Brewfile`, and helper scripts in `lib/` remain 100% untouched and fully operational.
-- **Safety First**: Milestone 1 contains zero write, delete, shell modification, or `sudo` operations. File contents are never printed in scan or status output.
+- **Safety First**: Inspection commands `scan` and `status` are strictly read-only with zero system mutations. `import-brewfile` only writes when `--output` is explicitly supplied, and then strictly creates a new file refusing to overwrite existing files. There are no package installs/removals, deletions, shell modifications, or `sudo` operations. File contents are never printed in scan or status output.
 - **Test Isolation**: All discovery and runner mechanisms are abstracted behind traits with unit fixtures and mock outputs, preventing tests from modifying or relying on actual machine state.
 
 ### Current Limitations
 
-- **Read-Only**: Does not install packages, copy files, or mutate system configurations.
+- **Read-Only Inspection / Safe Creation**: `scan` and `status` are strictly read-only and never install packages, copy files to system locations, or mutate existing system configurations. `import-brewfile` creates a new manifest skeleton file only when `--output` is explicitly passed and refuses to overwrite existing files.
 - **No GUI**: GPUI interface integration is slated for future milestones.
 - **No Remote Git Sync**: Future state sync will use a dedicated user-owned private state repository rather than personal branches in this repo.
 - **Language Managers**: Integrations for `fnm`, `nvm`, and Java manager diagnostics will be introduced in subsequent milestones.
