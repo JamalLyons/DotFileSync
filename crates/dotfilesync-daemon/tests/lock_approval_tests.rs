@@ -1,8 +1,6 @@
 //! Resource-lock serialization and the plan/approval contract, using harmless fixtures only.
 
-use dotfilesync_daemon::approval::{
-    ApprovalError, ApprovalStore, ApprovalToken, Plan, PlannedAction,
-};
+use dotfilesync_daemon::approval::{ApprovalError, ApprovalStore, ApprovalToken, Plan};
 use dotfilesync_daemon::locks::{LockMode, ResourceKey, ResourceLocks};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
@@ -180,12 +178,7 @@ fn plan(resource: &str, state: &str) -> Plan {
     Plan {
         plan_id: "p-1".into(),
         resource: resource.into(),
-        actions: vec![PlannedAction {
-            action: "fixture.touch".into(),
-            target: "fixture://example".into(),
-            summary: "harmless fixture step".into(),
-            reversible: true,
-        }],
+        content_digest: format!("digest-{resource}-{state}"),
         state_fingerprint: state.into(),
         owner_uid: OWNER,
     }
@@ -211,7 +204,7 @@ fn changed_plan_changed_state_wrong_owner_and_expiry_are_refused() {
 
     let t = store.issue(&p, OWNER, 0, TTL).unwrap();
     let mut changed = p.clone();
-    changed.actions[0].target = "fixture://other".into();
+    changed.content_digest = "digest-changed".into();
     assert_eq!(
         store.redeem(&t, &changed, OWNER, "state-1", 1),
         Err(ApprovalError::PlanMismatch)
@@ -297,17 +290,15 @@ fn tokens_never_appear_in_debug_output_and_are_unpredictable() {
 }
 
 #[test]
-fn plan_digest_covers_every_field() {
+fn approval_digest_is_the_core_plan_digest() {
     let p = plan("fixture-a", "s");
-    let base = p.digest();
+    assert_eq!(p.digest(), p.content_digest);
     let mut q = p.clone();
     q.owner_uid += 1;
-    assert_ne!(q.digest(), base);
-    let mut q = p.clone();
-    q.actions[0].reversible = false;
-    assert_ne!(q.digest(), base);
-    let mut q = p.clone();
     q.plan_id = "p-2".into();
-    assert_ne!(q.digest(), base);
-    assert_eq!(p.clone().digest(), base);
+    q.state_fingerprint = "other".into();
+    // Owner, id, and fingerprint are checked separately; they do not change the digest.
+    assert_eq!(q.digest(), p.digest());
+    q.content_digest = "core-digest".into();
+    assert_ne!(q.digest(), p.digest());
 }

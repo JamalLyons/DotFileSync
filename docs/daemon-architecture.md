@@ -6,10 +6,10 @@ exists in the code today, and marks the parts reserved for later issues.
 ## 1. Process model
 
 ```
- dotfilesync (CLI) ─┐                      ┌─ dotfilesync-core (scan/status, brew, configs)
+ dotfilesync (CLI) ─┐                      ┌─ dotfilesync-core (scan/status/plan/apply, brew, configs)
  future GPUI app  ──┼── dotfilesync-protocol ──► dotfilesyncd ─┤
-                    │   (typed client, UDS)                 └─ job manager, locks, journal, logs
-                    └── standalone fallback (same core::ops functions, in-process)
+                    │   (typed client, UDS)                 └─ job manager, locks, approvals, journal, logs
+                    └── standalone fallback for read-only commands and `plan` (same core::ops functions)
 ```
 
 | Crate | Role | Platform gate |
@@ -21,7 +21,8 @@ exists in the code today, and marks the parts reserved for later issues.
 
 - There is one daemon per user and per data directory. A single-instance lock enforces this (see §3).
 - Clients never run jobs themselves when they use the daemon. The standalone fallback runs the same
-  `core::ops` code in-process only when no daemon is running, and the CLI says which mode it used.
+  `core::ops` code in-process for scan, status, and plan when no daemon is running, and the CLI says
+  which mode it used. `apply` has no standalone path: the journal, backups, and locks live in the daemon.
 - The daemon owns its jobs. When a client disconnects, the jobs it started keep running.
 - Nothing listens on TCP or UDP, nothing runs as root, and no endpoint executes caller-supplied commands.
 
@@ -44,7 +45,14 @@ or `--data-dir` overrides it, and tests always use the override.
     dotfilesyncd.sock   0600  Unix-domain socket
     dotfilesyncd.lock   0600  flock() single-instance lock
   state/           0700
-    jobs.jsonl          0600  job journal (metadata only)
+    jobs.jsonl          0600  job journal (metadata only; no tokens, paths, or plan bodies)
+    runs/            0700
+      <run_id>/      0700  one apply attempt
+        journal.jsonl     append-only step journal
+        plan.json         copy of the plan that was applied
+        meta.json    0600  run id, plan id, job id, status (never an approval token)
+  backups/         0700
+    <run_id>/             files replaced by that run, relative to home
   logs/            0700
     dotfilesyncd.log    0600  rotated: .1 .. .3, 1 MiB each
 ```
@@ -145,16 +153,21 @@ connection is closed.
 | `list_jobs` | List jobs, including `interrupted` ones from the previous run |
 | `job_progress` | Progress events with `seq > since_seq` (lets a client catch up after reconnecting) |
 | `watch_job` | Stream `progress` notifications until the job finishes, then a final response |
-| `job_result` | Typed `ScanReport` / `StatusReport` from a successful job |
+| `job_result` | Typed result from a successful job (`ScanReport`, `StatusReport`, `Plan`, or apply `RunJournal`) |
 | `cancel_job` | Request cancellation (idempotent) |
 | `shutdown` | Graceful stop: cancel jobs, wait, unlink socket |
+| `plan.create` | Start a `plan` job from `PlanInput`. Result is `JobOutput::Plan { plan, plan_id }`. |
+| `plan.approve` | Bind a single-use token to a stored plan. Params: `plan_id`, `digest` (the digest the client reviewed). Returns `{token, expires_at_ms}`. |
+| `plan.apply` | Recompute the state fingerprint, redeem `token`, start an `apply` job. Params: `plan_id`, `token`, `allow_sudo`. Returns the job snapshot. |
+| `plan.resume` | Redeem a new token and continue a run. Params: `run_id`, `token`, `allow_sudo` (optional, default false). |
+| `plan.runs` | List runs, including `interrupted` ones from the previous daemon process. |
+| `plan.run_status` | One run's journal and status. |
 
 Reserved ops return `unsupported_operation` with the issue that will implement them. They never
 return success:
 
 | Reserved op | Issue |
 |---|---|
-| `plan.create`, `plan.approve`, `plan.apply` | #4 |
 | `runtime.*` | #5 |
 | `config.*` | #11 |
 | `sync.*` | #6 / #7 |
@@ -166,6 +179,8 @@ Errors are typed as `{code, message, details?}`. The codes are:
 - `incompatible_version`, `unauthorized`, `handshake_required`, `malformed_request`, `frame_too_large`
 - `unknown_operation`, `unsupported_operation`, `invalid_params`
 - `job_not_found`, `job_not_finished`, `job_failed`, `busy`, `shutting_down`, `internal`
+- `plan_not_found`, `approval_rejected` (`details.reason` is `unknown_token`, `expired`,
+  `already_used`, `plan_mismatch`, `state_changed`, `wrong_owner`, or `entropy`)
 
 Clients decode unknown codes as `unknown`, so a newer daemon can add codes without breaking older clients.
 
@@ -190,37 +205,42 @@ standard locations. The CLI's hidden `--brew-bin` test flag therefore forces sta
     set, it kills the process group and descendants it owns (the same cleanup as the timeout path
     from #2) and returns `RunnerError::Cancelled`.
   - A cancelled job never reports a partial result as success.
-- **Retention:** finished jobs and their results stay in memory, up to 64 jobs. Results are never
-  written to disk.
+- **Retention:** finished jobs and their in-memory results stay up to 64 jobs. Scan and status
+  reports are not written to disk. Apply writes its own journal and backups under `state/runs` and
+  `backups` (see §2); that journal is what `plan.run_status` reads after a reconnect or restart.
 
 ## 7. Resource locks
 
 `ResourceLocks` serializes access per resource:
 
-- **Shared** locks for reads. Scan and status take shared locks on `homebrew` and
+- **Shared** locks for reads. Scan, status, and plan take shared locks on `homebrew` and
   `manifest:<path>`, so they run concurrently.
-- **Exclusive** locks for future mutations (#4+). An exclusive lock waits for every holder of the
-  same key, and only that key.
+- **Exclusive** locks for apply and resume, on `homebrew` and `home:<path>`. An exclusive lock
+  waits for every holder of the same key, and only that key.
 
 Locks are acquired in a sorted order, which prevents deadlock. Waiting gives up when the job is
-cancelled. Tests cover this with harmless fixture critical sections. No mutating job type exists
-yet.
+cancelled.
 
-## 8. Plan/approval contract (for #4 and later)
+## 8. Plan/approval contract
 
-`dotfilesync_daemon::approval` defines the contract that future mutating operations will use.
+`dotfilesync_daemon::approval` binds a single-use token to a core plan (`dotfilesync_core::Plan`).
 
-- **Plan:** a resource key, an ordered list of planned actions (descriptive data, never commands),
-  a fingerprint of the state the plan was computed from, and the owner UID. Its digest is the
-  SHA-256 of its canonical JSON.
-- **Issuing:** `issue(plan)` returns a 256-bit random token. The store keeps only
-  `sha256(token)`, mapped to `{plan digest, owner uid, state fingerprint, expiry, consumed}`.
-- **Redeeming:** `redeem(token, plan, uid, current_state, now)` consumes the token in a single
-  step. It fails with one of:
+- **Binding:** plan id, resource (`home:<path>`), the core plan digest (`Plan::digest()`), the
+  state fingerprint the plan was computed from, and the owner UID. The daemon keeps the newest 32
+  plans in memory, keyed by plan id. Restart drops them, except plans reloaded from
+  `state/runs/*/plan.json` so an interrupted run can be approved again.
+- **Issuing:** `plan.approve` checks that the client-supplied digest equals the stored plan, then
+  `issue` returns a 256-bit random token. TTL is 10 minutes. The store keeps only `sha256(token)`,
+  mapped to `{plan digest, owner uid, state fingerprint, expiry, consumed}`. Approving a new plan
+  for the same home revokes older tokens for that home.
+- **Redeeming:** `plan.apply` re-runs planning observation and redeems against that fingerprint.
+  A mismatch is `approval_rejected` / `state_changed` and burns the token. `plan.resume` does not
+  re-observe: a partial apply has already changed the machine, so the token is checked against the
+  fingerprint stored with the plan. Resume still requires a new approval. Redeem fails with one of:
   - `unknown_token`
   - `expired`
   - `already_used` (replay)
-  - `plan_mismatch` (the plan changed)
+  - `plan_mismatch` (the plan changed, or the reviewed digest does not match)
   - `state_changed` (the observed state moved since planning)
   - `wrong_owner`
 
@@ -229,7 +249,9 @@ yet.
 - **Storage:** tokens exist only in memory and in the caller's hands. They are never journaled or
   logged, and `Debug` prints `ApprovalToken(<redacted>)`. A daemon restart invalidates every
   approval.
-- **Protocol:** the `plan.*` ops stay unsupported until #4 wires this contract to real plans.
+- **Runs:** an apply job keeps going if the client disconnects. The journal and backups stay under
+  the data directory. A run whose steps were unfinished when the daemon stopped is `interrupted`
+  and can be continued with `plan.resume`.
 
 ## 9. Journal, restart recovery and logs
 
@@ -277,7 +299,8 @@ Notes:
 
 ## 11. CLI modes
 
-`scan` and `status` take `--mode auto|daemon|standalone`, default `auto`.
+`scan`, `status`, and `plan` take `--mode auto|daemon|standalone`, default `auto`. `apply` always
+uses the daemon.
 
 | Mode | Behavior |
 |---|---|
@@ -289,11 +312,22 @@ Notes:
   paths, so paths in the report are absolute.
 - `import-brewfile` always runs locally. It writes a new file only with `--output`, and it refuses
   to overwrite an existing file.
-- `dotfilesync jobs list|show|watch|result|cancel` let you reconnect to jobs.
+- `dotfilesync jobs list|show|watch|result|cancel` let you reconnect to jobs. `jobs follow` is an
+  alias of `jobs watch`.
+- `dotfilesync plan [--manifest] [--profile NAME] [--upgrade] [--json]` prints one line per action
+  as `[risk] [rev|irrev] [copy|link|brew|ensure|fisher|shell] summary`, then totals. `--json` prints
+  the plan document. Two runs against the same machine produce the same JSON.
+- `dotfilesync apply [--manifest] [--profile] [--upgrade] [--yes] [--allow-sudo] [--dry-run]`
+  prints the plan, then approves and applies it through the daemon. Without `--yes`, a TTY asks
+  `Apply N actions? [y/N]`. A non-TTY without `--yes` is a dry run and exits 0. `--dry-run` never
+  applies. `--allow-sudo` is the only way a login-shell step may run. Ctrl-C detaches; the job
+  keeps running and can be followed with `dotfilesync jobs follow <id>`.
+- `dotfilesync apply --resume <run_id>` approves the run's plan again and continues it.
+  `dotfilesync runs [list|show <id>]` reads run status from the daemon.
 
 ## 12. Out of scope (later issues)
 
-- Plan and apply (#4), toolchains (#5), the config editor (#11), sync (#6) and the watcher (#7).
+- Toolchains (#5), the config editor (#11), sync (#6) and the watcher (#7).
 - GPUI (#8) and Linux systemd (#12).
 - A Windows service and any remote API.
 - KeepAlive or crash auto-restart policies.

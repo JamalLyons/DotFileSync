@@ -19,7 +19,9 @@ pub enum LockMode {
 pub enum ResourceKey {
     Homebrew,
     Manifest(std::path::PathBuf),
-    /// Test-only and future resources. Never derived from client-supplied strings.
+    /// The home directory an apply run mutates. Never taken from a free-form string.
+    Home(std::path::PathBuf),
+    /// Test-only resources. Never derived from client-supplied strings.
     Named(&'static str),
 }
 

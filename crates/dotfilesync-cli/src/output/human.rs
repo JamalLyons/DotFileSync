@@ -1,6 +1,6 @@
 use dotfilesync_core::{
-    BrewfileParseResult, ConfigDifference, DifferenceClassification, PackageDifference,
-    PackageKind, ScanReport, StatusReport,
+    ActionKind, BrewfileParseResult, ConfigDifference, DifferenceClassification, PackageDifference,
+    PackageKind, Plan, Risk, RunJournal, ScanReport, StatusReport,
 };
 
 pub fn render_scan_report(report: &ScanReport) -> String {
@@ -361,4 +361,78 @@ pub fn render_import_result(result: &BrewfileParseResult, output_path: Option<&s
     }
 
     out
+}
+
+pub fn render_plan(plan: &Plan) -> String {
+    let profile = plan.profile.as_deref().unwrap_or("base");
+    let mut out = format!("Plan {} (profile {profile})\n", plan.plan_id());
+    if plan.actions.is_empty() {
+        out.push_str("No changes. The system matches the manifest.\n");
+        return out;
+    }
+    let mut low = 0usize;
+    let mut medium = 0usize;
+    let mut high = 0usize;
+    let mut reversible = 0usize;
+    for action in &plan.actions {
+        match action.risk {
+            Risk::Low => low += 1,
+            Risk::Medium => medium += 1,
+            Risk::High => high += 1,
+        }
+        if action.reversible {
+            reversible += 1;
+        }
+        let rev = if action.reversible { "rev" } else { "irrev" };
+        out.push_str(&format!(
+            "[{}] [{rev}] [{}] {}\n",
+            risk_label(action.risk),
+            action_tag(&action.kind),
+            action.summary
+        ));
+    }
+    let n = plan.actions.len();
+    let noun = if n == 1 { "action" } else { "actions" };
+    let irreversible = n - reversible;
+    out.push_str(&format!(
+        "\n{n} {noun}: low {low}, medium {medium}, high {high}; reversible {reversible}, irreversible {irreversible}\n"
+    ));
+    out
+}
+
+pub fn render_run(journal: &RunJournal) -> String {
+    let mut out = format!("Run {} (plan {})\n", journal.run_id, journal.plan_digest);
+    if journal.steps.is_empty() {
+        out.push_str("No steps.\n");
+        return out;
+    }
+    for step in &journal.steps {
+        out.push_str(&format!("  {}  {:?}\n", step.action_id, step.status));
+        if let Some(error) = &step.error {
+            out.push_str(&format!("    {error}\n"));
+        }
+    }
+    out
+}
+
+fn risk_label(risk: Risk) -> &'static str {
+    match risk {
+        Risk::Low => "low",
+        Risk::Medium => "medium",
+        Risk::High => "high",
+    }
+}
+
+fn action_tag(kind: &ActionKind) -> &'static str {
+    match kind {
+        ActionKind::BrewInstallFormula { .. }
+        | ActionKind::BrewInstallCask { .. }
+        | ActionKind::BrewUpgradeFormula { .. }
+        | ActionKind::BrewUpgradeCask { .. } => "brew",
+        ActionKind::LinkFile { .. } => "link",
+        ActionKind::CopyFile { .. } => "copy",
+        ActionKind::EnsureLocalOverride { .. } => "ensure",
+        ActionKind::InstallFisher | ActionKind::FisherUpdate => "fisher",
+        ActionKind::SetLoginShell { .. } => "shell",
+    }
 }

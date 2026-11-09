@@ -148,6 +148,7 @@ impl Daemon {
             .set_nonblocking(true)
             .map_err(|e| DaemonError::io(&layout.socket, e))?;
 
+        let owner_uid = current_euid();
         let jobs = JobManager::new(
             Arc::new(journal),
             Arc::clone(&log),
@@ -155,6 +156,11 @@ impl Daemon {
             config.brew_bin.clone(),
             config.jobs.clone(),
             &recovery.jobs,
+            crate::jobs::JobPaths {
+                runs_dir: layout.runs_dir.clone(),
+                backups_dir: layout.backups_dir.clone(),
+                owner_uid,
+            },
         );
         log.info(&format!(
             "dotfilesyncd {} started pid={} protocol={}",
@@ -169,7 +175,7 @@ impl Daemon {
                 jobs,
                 log,
                 auth: Arc::clone(&config.authenticator),
-                owner_uid: current_euid(),
+                owner_uid,
                 limits: config.connection.clone(),
                 shutdown: ShutdownHandle(Arc::new(AtomicBool::new(false))),
                 connections: AtomicUsize::new(0),
@@ -473,6 +479,34 @@ fn dispatch(shared: &Shared, request: Request) -> Result<Response, ProtocolError
         }
         Request::JobResult { job_id } => shared.jobs.result(&job_id).map(Response::JobResult),
         Request::CancelJob { job_id } => shared.jobs.cancel(&job_id).map(Response::Job),
+        Request::PlanCreate { input } => shared
+            .jobs
+            .start_plan(input, shared.owner_uid)
+            .map(Response::Job),
+        Request::PlanApprove { plan_id, digest } => shared
+            .jobs
+            .approve(&plan_id, &digest, shared.owner_uid)
+            .map(Response::Approval),
+        Request::PlanApply {
+            plan_id,
+            token,
+            allow_sudo,
+        } => shared
+            .jobs
+            .apply(&plan_id, &token, allow_sudo, shared.owner_uid)
+            .map(Response::Job),
+        Request::PlanResume {
+            run_id,
+            token,
+            allow_sudo,
+        } => shared
+            .jobs
+            .resume(&run_id, &token, allow_sudo, shared.owner_uid)
+            .map(Response::Job),
+        Request::PlanRuns {} => Ok(Response::Runs {
+            runs: shared.jobs.runs(),
+        }),
+        Request::PlanRunStatus { run_id } => shared.jobs.run_status(&run_id).map(Response::Run),
         Request::Shutdown {} => {
             shared.log.info("shutdown requested over IPC");
             shared.shutdown.shutdown();

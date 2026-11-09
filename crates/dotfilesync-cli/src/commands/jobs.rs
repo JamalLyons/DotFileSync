@@ -2,13 +2,14 @@
 
 use anyhow::Result;
 use clap::Subcommand;
+use dotfilesync_core::RunJournal;
 use dotfilesync_protocol::{JobOutput, JobSnapshot};
 use std::path::Path;
 
 use super::mode;
 use super::remote::{self, Remote};
 use super::{scan, status};
-use crate::output::json;
+use crate::output::{human, json};
 
 #[derive(Debug, Subcommand)]
 pub enum JobsCommand {
@@ -24,6 +25,7 @@ pub enum JobsCommand {
         json: bool,
     },
     /// Reconnect to a job: print progress after SEQ, then wait for it to finish
+    #[command(alias = "follow")]
     Watch {
         job_id: String,
         /// Only show events with a sequence number greater than this
@@ -111,6 +113,14 @@ pub fn execute(cmd: JobsCommand, data_dir: Option<&Path>) -> Result<()> {
                 Remote::Finished(JobOutput::Status { report }) => {
                     status::print_report(&report, as_json)?
                 }
+                Remote::Finished(JobOutput::Plan { plan, .. }) => {
+                    if as_json {
+                        println!("{}", json::render_json(&plan)?);
+                    } else {
+                        print!("{}", human::render_plan(&plan));
+                    }
+                }
+                Remote::Finished(JobOutput::Apply { journal }) => print_journal(&journal, as_json)?,
                 Remote::Failed(job) => return Err(remote::failure(&job)),
                 Remote::Detached(_) => unreachable!(),
             }
@@ -119,6 +129,15 @@ pub fn execute(cmd: JobsCommand, data_dir: Option<&Path>) -> Result<()> {
             let j = client.cancel_job(&job_id)?;
             println!("{}", line(&j));
         }
+    }
+    Ok(())
+}
+
+fn print_journal(journal: &RunJournal, as_json: bool) -> Result<()> {
+    if as_json {
+        println!("{}", json::render_json(journal)?);
+    } else {
+        print!("{}", human::render_run(journal));
     }
     Ok(())
 }

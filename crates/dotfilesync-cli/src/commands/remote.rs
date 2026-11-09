@@ -24,16 +24,29 @@ pub fn run_job(client: &mut Client, spec: JobSpec, detach: bool, quiet: bool) ->
         eprintln!("Detached. Follow it with `dotfilesync jobs watch {id}`.");
         return Ok(Remote::Detached(job));
     }
+    follow(client, &job, quiet)
+}
+
+/// Watch a job that is already running. Ctrl-C drops this client only.
+pub fn follow(client: &mut Client, job: &JobSnapshot, quiet: bool) -> Result<Remote> {
+    let id = job.job_id.clone();
     if !quiet {
         eprintln!(
-            "Ctrl-C detaches without cancelling; cancel with `dotfilesync jobs cancel {id}`."
+            "Ctrl-C detaches without cancelling. Follow it with `dotfilesync jobs follow {id}`."
         );
     }
-    let final_snapshot = client.watch_job(&id, 0, &mut |ev| {
+    let final_snapshot = match client.watch_job(&id, 0, &mut |ev| {
         if !quiet {
             eprintln!("  [{}] {}", ev.stage, ev.message);
         }
-    })?;
+    }) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            eprintln!("Disconnected from job {id} ({error}). It keeps running.");
+            eprintln!("Follow it with `dotfilesync jobs follow {id}`.");
+            return Err(error.into());
+        }
+    };
     finish(client, &final_snapshot)
 }
 

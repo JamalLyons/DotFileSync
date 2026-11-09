@@ -65,6 +65,10 @@ pub struct DataLayout {
     pub lock_file: PathBuf,
     pub state_dir: PathBuf,
     pub journal: PathBuf,
+    /// `<state>/runs/<run_id>/` holds `journal.jsonl`, `plan.json`, and `meta.json`.
+    pub runs_dir: PathBuf,
+    /// `<root>/backups/<run_id>/` holds files replaced by apply.
+    pub backups_dir: PathBuf,
     pub logs_dir: PathBuf,
     pub log_file: PathBuf,
 }
@@ -79,6 +83,8 @@ impl DataLayout {
             socket: run_dir.join("dotfilesyncd.sock"),
             lock_file: run_dir.join("dotfilesyncd.lock"),
             journal: state_dir.join("jobs.jsonl"),
+            runs_dir: state_dir.join("runs"),
+            backups_dir: root.join("backups"),
             log_file: logs_dir.join("dotfilesyncd.log"),
             root,
             run_dir,
@@ -121,7 +127,14 @@ impl DataLayout {
 
     /// Create (if needed) and validate every private directory. Daemon-side only.
     pub fn ensure_private_dirs(&self) -> Result<(), PathError> {
-        for dir in [&self.root, &self.run_dir, &self.state_dir, &self.logs_dir] {
+        for dir in [
+            &self.root,
+            &self.run_dir,
+            &self.state_dir,
+            &self.runs_dir,
+            &self.backups_dir,
+            &self.logs_dir,
+        ] {
             ensure_private_dir(dir)?;
         }
         self.check_socket_path_len()
@@ -229,6 +242,8 @@ mod tests {
             &layout.root,
             &layout.run_dir,
             &layout.state_dir,
+            &layout.runs_dir,
+            &layout.backups_dir,
             &layout.logs_dir,
         ] {
             let mode = fs::metadata(d).unwrap().permissions().mode() & 0o777;

@@ -1,7 +1,10 @@
+pub mod apply;
 pub mod import;
 pub mod jobs;
 pub mod mode;
+pub mod plan;
 pub mod remote;
+pub mod runs;
 pub mod scan;
 pub mod service;
 pub mod status;
