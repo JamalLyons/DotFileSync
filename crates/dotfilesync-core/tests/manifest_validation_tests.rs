@@ -38,12 +38,20 @@ fn test_valid_manifest_passes_validation() {
 
 #[test]
 fn test_unsupported_schema_version() {
-    let manifest = Manifest::new(999);
-    let errs = validate_manifest(&manifest).unwrap_err();
-    assert!(errs.iter().any(|e| matches!(
-        e,
-        ValidationError::UnsupportedSchemaVersion { version: 999, .. }
-    )));
+    for version in [0, 2, 999] {
+        let manifest = Manifest::new(version);
+        let errs = validate_manifest(&manifest).unwrap_err();
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                ValidationError::UnsupportedSchemaVersion {
+                    version: found,
+                    expected: CURRENT_SCHEMA_VERSION,
+                } if *found == version
+            )),
+            "schema version {version} should be rejected"
+        );
+    }
 }
 
 #[test]

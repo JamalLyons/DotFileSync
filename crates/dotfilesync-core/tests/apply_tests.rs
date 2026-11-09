@@ -60,7 +60,7 @@ fn backup_is_created_for_a_differing_file_and_journal_is_written() {
     let manifest = manifest_with(
         &repo,
         r#"
-schema_version = 2
+schema_version = 1
 [[files]]
 source = "config/app.conf"
 target = "~/.config/app.conf"
@@ -111,7 +111,7 @@ fn resume_skips_completed_steps_after_step_three_fails() {
     let manifest = manifest_with(
         &repo,
         r#"
-schema_version = 2
+schema_version = 1
 [package_managers.homebrew]
 formulae = ["alpha", "beta", "gamma"]
 "#,
@@ -190,7 +190,7 @@ fn local_fish_is_not_overwritten() {
     let manifest = manifest_with(
         &repo,
         r#"
-schema_version = 2
+schema_version = 1
 
 [[files]]
 source = "config/app.conf"
@@ -244,7 +244,7 @@ fn replan_after_apply_is_empty_on_a_converged_fixture() {
     let manifest = manifest_with(
         &repo,
         r#"
-schema_version = 2
+schema_version = 1
 [package_managers.homebrew]
 formulae = ["git"]
 [[files]]
@@ -286,7 +286,7 @@ fn symlink_mode_points_target_at_source() {
     let manifest = manifest_with(
         &repo,
         r#"
-schema_version = 2
+schema_version = 1
 [[files]]
 source = "config/app.conf"
 target = "~/.config/app.conf"

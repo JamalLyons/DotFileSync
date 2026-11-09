@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+/// The only manifest schema this build accepts.
+pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
 /// Operating system a manifest entry can be conditioned on.
 ///

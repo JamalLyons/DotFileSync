@@ -37,7 +37,7 @@ fn write_fixture(root: &std::path::Path) -> PathBuf {
     fs::write(
         &manifest,
         r#"
-schema_version = 2
+schema_version = 1
 
 [package_managers.homebrew]
 formulae = ["git"]
