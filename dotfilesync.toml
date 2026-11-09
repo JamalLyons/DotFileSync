@@ -1,6 +1,6 @@
 # dotfilesync.toml — declarative developer environment manifest
-# Schema version 2 (profiles + setup). See docs/manifest.md.
-schema_version = 2
+# Schema version 1 (profiles + setup). See docs/manifest.md.
+schema_version = 1
 
 [metadata]
 name = "my-shell"

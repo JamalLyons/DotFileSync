@@ -57,7 +57,7 @@ const SENSITIVE_PATH_PATTERNS: &[&str] = &[
 pub fn validate_manifest(manifest: &Manifest) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
 
-    if manifest.schema_version != 1 && manifest.schema_version != CURRENT_SCHEMA_VERSION {
+    if manifest.schema_version != CURRENT_SCHEMA_VERSION {
         errors.push(ValidationError::UnsupportedSchemaVersion {
             version: manifest.schema_version,
             expected: CURRENT_SCHEMA_VERSION,

@@ -10,9 +10,9 @@ fn resolved(sel: &ProfileSelection, hostname: &str) -> dotfilesync_core::Resolve
 }
 
 #[test]
-fn repo_manifest_parses_as_v2() {
+fn repo_manifest_parses() {
     let manifest = parse_manifest(MANIFEST).expect("repo dotfilesync.toml should parse");
-    assert_eq!(manifest.schema_version, 2);
+    assert_eq!(manifest.schema_version, 1);
     assert_eq!(manifest.setup.login_shell.as_deref(), Some("fish"));
     assert!(manifest.setup.fisher);
     assert_eq!(manifest.select.default.as_deref(), Some("personal"));

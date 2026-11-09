@@ -306,7 +306,7 @@ A manual QA checklist is in [docs/daemon-manual-qa.md](docs/daemon-manual-qa.md)
 
 ### Manifest Schema (`dotfilesync.toml`)
 
-The repository includes a versioned `dotfilesync.toml` (schema version 2) modeling the current `Brewfile`, `fish/` configuration, and `zed/settings.json`, plus `personal` and `work` profiles. The schema reference is [docs/manifest.md](docs/manifest.md).
+The repository includes a versioned `dotfilesync.toml` (schema version 1) modeling the current `Brewfile`, `fish/` configuration, and `zed/settings.json`, plus `personal` and `work` profiles. The schema reference is [docs/manifest.md](docs/manifest.md).
 
 Key capabilities:
 - **Explicit Tracking**: Separate repository `source` and machine `target` paths (e.g. `~/.config/fish/config.fish`).

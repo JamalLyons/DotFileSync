@@ -1,14 +1,14 @@
-# Manifest schema (v2)
+# Manifest schema
 
-`dotfilesync.toml` is the desired state for a machine. Schema version **2** adds profiles, hostname selection, and setup keys. Version **1** still parses: it is the base layer only, with no profiles.
+`dotfilesync.toml` is the desired state for a machine. Schema version **1** includes profiles, hostname selection, and setup keys. Profiles are optional: a manifest with only the base layer is valid. Any other `schema_version` is rejected.
 
-The repository manifest is schema 2. `personal` keeps that base layer (including game casks). `work` adds `awscli` and `slack` and removes `melonds`, `minecraft`, `roblox`, and `steam`. `[select] default = "personal"`.
+The repository manifest is schema 1. `personal` keeps that base layer (including game casks). `work` adds `awscli` and `slack` and removes `melonds`, `minecraft`, `roblox`, and `steam`. `[select] default = "personal"`.
 
 ## Top-level fields
 
 | Field | Required | Meaning |
 |---|---|---|
-| `schema_version` | yes | `1` or `2`. |
+| `schema_version` | yes | `1`. |
 | `metadata` | no | `name`, `description`. |
 | `package_managers.homebrew` | no | Base `formulae` and `casks`. |
 | `files` | no | Base tracked files (`source`, `target`). |
@@ -120,7 +120,7 @@ Within one layer:
 ### Worked example
 
 ```toml
-schema_version = 2
+schema_version = 1
 
 [package_managers.homebrew]
 formulae = ["git", "minecraft"]

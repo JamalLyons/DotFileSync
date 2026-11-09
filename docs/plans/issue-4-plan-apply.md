@@ -23,9 +23,9 @@ Read before starting: `docs/daemon-architecture.md`, `crates/dotfilesync-core/sr
 
 ## Workstream A — core (crate `dotfilesync-core`) — runs FIRST
 
-### A1. Manifest v2 with profiles (`manifest/model.rs`, `manifest/profile.rs` new, `validation.rs`)
+### A1. Manifest schema with profiles (`manifest/model.rs`, `manifest/profile.rs` new, `validation.rs`)
 
-- `CURRENT_SCHEMA_VERSION = 2`. `parse_manifest` accepts 1 and 2 (v1 = base only, no profiles).
+- `CURRENT_SCHEMA_VERSION = 1`. `parse_manifest` accepts only that version. Profiles are optional, so a base-only manifest is still valid.
 - New top-level fields (all `#[serde(default)]`):
   ```toml
   [select]                      # optional: hostname → profile mapping
@@ -33,7 +33,7 @@ Read before starting: `docs/daemon-architecture.md`, `crates/dotfilesync-core/sr
   default = "personal"          # optional fallback
 
   [profiles.work]
-  os = "macos"                  # optional condition; v1 only implements "macos"
+  os = "macos"                  # optional condition; only "macos" is implemented
   extends = []                  # optional, other profile names applied before this one
   [profiles.work.package_managers.homebrew]
   formulae = ["awscli"]         # added
@@ -78,7 +78,7 @@ Read before starting: `docs/daemon-architecture.md`, `crates/dotfilesync-core/sr
   Add `profile: Option<String>` to `StatusInput`/`ScanInput` with `#[serde(default)]` (None = Auto).
 - Unit tests (`tests/profile_tests.rs`): base only; overlay adds; exclude removes; later re-add;
   conflicting file target (later wins); extends chain + cycle error; hostname auto-select; default
-  fallback; unknown explicit profile; os mismatch filtered; v1 manifest still parses.
+  fallback; unknown explicit profile; os mismatch filtered; a manifest without profiles resolves to the base layer; any other schema version is rejected.
 
 ### A2. Plan model + planner (`plan/mod.rs`, `plan/model.rs`, `plan/planner.rs`)
 
@@ -216,7 +216,7 @@ Export everything from `lib.rs`. Add `ops::run_plan` alongside `run_status`.
 
 Touch ONLY: `dotfilesync.toml`, `fixtures/`, `docs/manifest.md` (new), `docs/plan-apply.md` (new),
 `README.md`, and core test fixtures under `crates/dotfilesync-core/tests/fixtures*` if needed.
-- Migrate `dotfilesync.toml` to `schema_version = 2`: add `[setup] login_shell = "fish"`,
+- Write `dotfilesync.toml` at `schema_version = 1`: add `[setup] login_shell = "fish"`,
   `fisher = true`; add a `personal` and `work` profile example (work excludes games:
   `minecraft`, `roblox`, `steam`, `melonds`); `[select] default = "personal"`. Add missing fish
   `conf.d` files that exist in the repo. Keep `local.fish` as override only.
@@ -225,7 +225,7 @@ Touch ONLY: `dotfilesync.toml`, `fixtures/`, `docs/manifest.md` (new), `docs/pla
   default, `--yes`, no silent sudo, backups dir, local overrides never overwritten), the
   **reversible vs irreversible action table**, setup.sh parity matrix (what's ported, what's not
   yet: fnm/node/pnpm, xcode, LM Studio models → #5), and that `setup.sh` remains until parity.
-- `docs/manifest.md`: v2 schema reference, profiles, selection rules, merge order with a worked example.
+- `docs/manifest.md`: schema reference, profiles, selection rules, merge order with a worked example.
 - README: short section linking both docs; update "read-only" wording.
 - Verify the migrated manifest parses with `cargo run -p dotfilesync-cli -- plan --manifest dotfilesync.toml --json`
   only if B is done; otherwise add a core test that `parse_manifest(include_str!("../../../dotfilesync.toml"))` succeeds.

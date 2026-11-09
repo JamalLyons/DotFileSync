@@ -14,7 +14,7 @@ fn resolve(
 #[test]
 fn base_only_ignores_profiles() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [package_managers.homebrew]
 formulae = ["git", "fish"]
@@ -37,7 +37,7 @@ formulae = ["awscli"]
 #[test]
 fn overlay_adds_packages() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [package_managers.homebrew]
 formulae = ["git"]
@@ -56,7 +56,7 @@ casks = ["slack"]
 #[test]
 fn exclude_removes_package_from_earlier_layer() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [package_managers.homebrew]
 formulae = ["git", "minecraft"]
@@ -74,7 +74,7 @@ exclude_casks = ["steam"]
 #[test]
 fn later_layer_readds_excluded_package() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [package_managers.homebrew]
 formulae = ["minecraft"]
@@ -95,7 +95,7 @@ formulae = ["minecraft", "awscli"]
 #[test]
 fn conflicting_file_target_later_layer_wins() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [[files]]
 source = "base/config.fish"
@@ -122,7 +122,7 @@ exclude_files = []
 #[test]
 fn exclude_files_removes_by_target() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [[files]]
 source = "zed/settings.json"
@@ -143,7 +143,7 @@ exclude_files = ["~/.config/zed/settings.json"]
 #[test]
 fn extends_chain_is_depth_first_and_cycle_errors() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [package_managers.homebrew]
 formulae = ["git"]
@@ -161,7 +161,7 @@ formulae = ["awscli"]
     assert_eq!(resolved.homebrew.formulae, vec!["awscli", "git", "ripgrep"]);
 
     let cycle = r#"
-schema_version = 2
+schema_version = 1
 
 [profiles.a]
 extends = ["b"]
@@ -177,7 +177,7 @@ extends = ["a"]
 #[test]
 fn hostname_auto_selects_profile_and_strips_local_suffix() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [select]
 hostnames = { "jamals-mbp" = "personal", "work-mac" = "work" }
@@ -196,7 +196,7 @@ casks = ["zoom"]
 #[test]
 fn default_profile_is_fallback_when_hostname_is_unknown() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [select]
 hostnames = { "jamals-mbp" = "work" }
@@ -216,7 +216,7 @@ formulae = ["awscli"]
 #[test]
 fn unknown_explicit_profile_errors() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [profiles.personal.package_managers.homebrew]
 formulae = ["fish"]
@@ -235,7 +235,7 @@ formulae = ["fish"]
 #[test]
 fn os_mismatch_is_filtered() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [[files]]
 source = "mac/only.conf"
@@ -276,7 +276,7 @@ os = "linux"
 }
 
 #[test]
-fn v1_manifest_still_parses_as_base_only() {
+fn manifest_without_profiles_resolves_to_base() {
     let toml = r#"
 schema_version = 1
 
@@ -287,7 +287,7 @@ formulae = ["git"]
 source = "fish/config.fish"
 target = "~/.config/fish/config.fish"
 "#;
-    let manifest = parse_manifest(toml).expect("v1 manifest should parse");
+    let manifest = parse_manifest(toml).expect("base manifest should parse");
     assert_eq!(manifest.schema_version, 1);
     let resolved = resolve_profile(
         &manifest,
@@ -304,7 +304,7 @@ target = "~/.config/fish/config.fish"
 #[test]
 fn unknown_profile_in_select_is_a_validation_error() {
     let toml = r#"
-schema_version = 2
+schema_version = 1
 
 [select]
 default = "missing"
