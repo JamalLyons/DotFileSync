@@ -22,11 +22,25 @@ pub struct PackageManagersSection {
     pub homebrew: HomebrewSection,
 }
 
+/// A tracked configuration file entry mapping repository source to machine target.
+///
+/// Representation and Encoding:
+/// TOML manifest files require UTF-8 encoded text. To allow manifests to reference arbitrary
+/// non-UTF-8 native filesystem paths without violating the TOML specification or losing byte fidelity,
+/// path strings support standard URI percent-encoding (`%HH`, e.g. `%FF`). Standard UTF-8 paths
+/// are preserved directly as-is.
+///
+/// On macOS, the default APFS filesystem requires path components to be valid UTF-8 sequences and
+/// returns `EILSEQ` (Errno 92) if non-UTF-8 file entries are created, which `ConfigInspector`
+/// detects and reports as a specific diagnostic. Non-APFS volumes (such as FAT32, exFAT, or NFS)
+/// support arbitrary byte paths on macOS. In all cases, native non-UTF-8 paths originating from
+/// external environment roots (such as a non-UTF-8 base repo directory or HOME directory) or
+/// decoded percent-encoded paths are preserved without lossy transformation during path resolution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrackedFile {
-    /// Relative path within the repository
+    /// Relative path within the repository (UTF-8)
     pub source: String,
-    /// Destination path on the target machine (supports `~` expansion)
+    /// Destination path on the target machine (supports `~` expansion, UTF-8)
     pub target: String,
     /// Whether this file is expected to be a machine-local override (not synced)
     #[serde(default)]

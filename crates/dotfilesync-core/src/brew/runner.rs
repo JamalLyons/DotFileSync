@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::Read;
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
 use wait_timeout::ChildExt;
@@ -131,6 +133,8 @@ impl CommandRunner for RealCommandRunner {
     }
 
     fn run_path(&self, program: &Path, args: &[&OsStr]) -> Result<CommandOutput, RunnerError> {
+        let start_time = std::time::Instant::now();
+
         let exec_path = if let Some(prog_str) = program.to_str() {
             self.find_executable(prog_str)
                 .unwrap_or_else(|| program.to_path_buf())
@@ -143,8 +147,12 @@ impl CommandRunner for RealCommandRunner {
 
         // On Unix, spawn in a separate process group so timeout cleanup terminates
         // the spawned command and all its descendants without affecting unrelated processes.
-        // Limitation: descendants that explicitly detach via setsid()/setpgid() are outside
-        // this process group and cannot be reached by group signal termination.
+        // Limits:
+        // Descendants that explicitly detach from the session or process group (e.g. via setsid(2)
+        // or setpgid(2)) are outside this group and cannot be safely discovered or killed without
+        // fragile process-table heuristics or PID reuse hazards. However, output-reader threads
+        // are bounded by the overall call deadline, so unkillable detached descendants will never
+        // block the caller.
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -165,20 +173,17 @@ impl CommandRunner for RealCommandRunner {
         let pid = child.id();
         let program_display = program.display().to_string();
 
-        let kill_all = |child: &mut std::process::Child| {
-            kill_process_tree(pid);
-            let _ = child.kill();
-        };
-
-        // Drain stdout and stderr while process runs to prevent pipe buffer deadlocks
-        let mut stdout_pipe = child
+        // Drain stdout and stderr while process runs to prevent pipe buffer deadlocks.
+        // We set non-blocking mode on pipes and use periodic polling so reader threads
+        // can observe stop signals promptly rather than blocking indefinitely waiting for EOF.
+        let stdout_pipe = child
             .stdout
             .take()
             .ok_or_else(|| RunnerError::ExecutionFailed {
                 program: program_display.clone(),
                 message: "Failed to capture stdout pipe".to_string(),
             })?;
-        let mut stderr_pipe = child
+        let stderr_pipe = child
             .stderr
             .take()
             .ok_or_else(|| RunnerError::ExecutionFailed {
@@ -186,150 +191,280 @@ impl CommandRunner for RealCommandRunner {
                 message: "Failed to capture stderr pipe".to_string(),
             })?;
 
-        let stdout_handle = std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let res = stdout_pipe.read_to_end(&mut bytes);
-            (bytes, res)
-        });
+        let mut tracked_descendants: Vec<i32> = Vec::new();
 
-        let stderr_handle = std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let res = stderr_pipe.read_to_end(&mut bytes);
-            (bytes, res)
-        });
+        if let Err(e) = set_nonblocking(stdout_pipe.as_raw_fd()) {
+            kill_owned_processes(pid, &tracked_descendants, &mut child);
+            return Err(RunnerError::ExecutionFailed {
+                program: program_display,
+                message: format!("Failed setting non-blocking mode on stdout: {e}"),
+            });
+        }
+        if let Err(e) = set_nonblocking(stderr_pipe.as_raw_fd()) {
+            kill_owned_processes(pid, &tracked_descendants, &mut child);
+            return Err(RunnerError::ExecutionFailed {
+                program: program_display,
+                message: format!("Failed setting non-blocking mode on stderr: {e}"),
+            });
+        }
 
-        let start_time = std::time::Instant::now();
+        let stop_stdout = Arc::new(AtomicBool::new(false));
+        let stop_stderr = Arc::new(AtomicBool::new(false));
 
-        match child.wait_timeout(self.timeout) {
-            Ok(Some(status)) => {
-                // Direct child exited within timeout.
-                // Wait for output-reader threads, bounded by overall call deadline to prevent
-                // lingering descendants from keeping pipes open indefinitely.
-                let elapsed = start_time.elapsed();
-                if elapsed >= self.timeout {
-                    kill_all(&mut child);
-                    let _ = child.wait();
-                    let _ = stdout_handle.join();
-                    let _ = stderr_handle.join();
+        let stdout_handle = spawn_reader_thread(stdout_pipe, Arc::clone(&stop_stdout));
+        let stderr_handle = spawn_reader_thread(stderr_pipe, Arc::clone(&stop_stderr));
+
+        let mut status_opt = None;
+        while start_time.elapsed() < self.timeout {
+            collect_child_pids(pid as i32, &mut tracked_descendants);
+            let remaining = self.timeout.saturating_sub(start_time.elapsed());
+            let slice = Duration::from_millis(20).min(remaining);
+            match child.wait_timeout(slice) {
+                Ok(Some(status)) => {
+                    status_opt = Some(status);
+                    break;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    stop_stdout.store(true, Ordering::SeqCst);
+                    stop_stderr.store(true, Ordering::SeqCst);
+                    kill_owned_processes(pid, &tracked_descendants, &mut child);
+                    let _ =
+                        join_reader_bounded(stdout_handle, &stop_stdout, Duration::from_millis(50));
+                    let _ =
+                        join_reader_bounded(stderr_handle, &stop_stderr, Duration::from_millis(50));
+                    return Err(RunnerError::ExecutionFailed {
+                        program: program_display,
+                        message: e.to_string(),
+                    });
+                }
+            }
+        }
+
+        if let Some(status) = status_opt {
+            // Direct child exited within timeout.
+            // Wait for output-reader threads, bounded by overall call deadline to prevent
+            // lingering descendants from keeping pipes open indefinitely.
+            while !stdout_handle.is_finished() || !stderr_handle.is_finished() {
+                if start_time.elapsed() >= self.timeout {
+                    stop_stdout.store(true, Ordering::SeqCst);
+                    stop_stderr.store(true, Ordering::SeqCst);
+                    kill_owned_processes(pid, &tracked_descendants, &mut child);
+                    let _ =
+                        join_reader_bounded(stdout_handle, &stop_stdout, Duration::from_millis(50));
+                    let _ =
+                        join_reader_bounded(stderr_handle, &stop_stderr, Duration::from_millis(50));
                     return Err(RunnerError::Timeout {
                         program: program_display,
                         timeout: self.timeout,
                     });
                 }
+                std::thread::sleep(Duration::from_millis(2));
+            }
 
-                let remaining = self.timeout - elapsed;
-                let reader_start = std::time::Instant::now();
-                while !stdout_handle.is_finished() || !stderr_handle.is_finished() {
-                    if reader_start.elapsed() >= remaining {
-                        kill_all(&mut child);
-                        let _ = child.wait();
-                        let _ = stdout_handle.join();
-                        let _ = stderr_handle.join();
-                        return Err(RunnerError::Timeout {
-                            program: program_display,
-                            timeout: self.timeout,
-                        });
+            let (stdout_bytes, stdout_res) =
+                stdout_handle
+                    .join()
+                    .map_err(|_| RunnerError::ExecutionFailed {
+                        program: program_display.clone(),
+                        message: "Stdout reader thread panicked".to_string(),
+                    })?;
+            stdout_res.map_err(|e| RunnerError::ExecutionFailed {
+                program: program_display.clone(),
+                message: format!("Failed reading stdout: {e}"),
+            })?;
+
+            let (stderr_bytes, stderr_res) =
+                stderr_handle
+                    .join()
+                    .map_err(|_| RunnerError::ExecutionFailed {
+                        program: program_display.clone(),
+                        message: "Stderr reader thread panicked".to_string(),
+                    })?;
+            stderr_res.map_err(|e| RunnerError::ExecutionFailed {
+                program: program_display.clone(),
+                message: format!("Failed reading stderr: {e}"),
+            })?;
+
+            let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+            let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+            let code = status.code().unwrap_or(-1);
+
+            if !status.success() {
+                Err(RunnerError::NonZeroExit {
+                    program: program_display,
+                    code,
+                    stderr,
+                })
+            } else {
+                Ok(CommandOutput {
+                    status_code: code,
+                    stdout,
+                    stderr,
+                })
+            }
+        } else {
+            // Command wait timed out: kill owned process group and all tracked descendants, reap child, and bound reader cleanup
+            stop_stdout.store(true, Ordering::SeqCst);
+            stop_stderr.store(true, Ordering::SeqCst);
+            kill_owned_processes(pid, &tracked_descendants, &mut child);
+            let _ = join_reader_bounded(stdout_handle, &stop_stdout, Duration::from_millis(50));
+            let _ = join_reader_bounded(stderr_handle, &stop_stderr, Duration::from_millis(50));
+            Err(RunnerError::Timeout {
+                program: program_display,
+                timeout: self.timeout,
+            })
+        }
+    }
+}
+
+fn set_nonblocking(fd: std::os::unix::io::RawFd) -> std::io::Result<()> {
+    #[cfg(unix)]
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+type ReaderOutput = (Vec<u8>, std::io::Result<()>);
+type ReaderJoinResult = Result<ReaderOutput, RunnerError>;
+
+fn spawn_reader_thread<R: Read + AsRawFd + Send + 'static>(
+    mut pipe: R,
+    stop: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<ReaderOutput> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let fd = pipe.as_raw_fd();
+        let mut buf = [0u8; 8192];
+
+        while !stop.load(Ordering::Relaxed) {
+            let mut pfd = libc::pollfd {
+                fd,
+                events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+                revents: 0,
+            };
+            // Poll for up to 15ms so stop notifications or incoming bytes are handled promptly
+            let ret = unsafe { libc::poll(&mut pfd, 1, 15) };
+            if ret < 0 {
+                let err = std::io::Error::last_os_error();
+                if err.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return (bytes, Err(err));
+            }
+            if ret > 0 {
+                loop {
+                    match pipe.read(&mut buf) {
+                        Ok(0) => {
+                            // EOF reached on pipe
+                            return (bytes, Ok(()));
+                        }
+                        Ok(n) => {
+                            bytes.extend_from_slice(&buf[..n]);
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            break;
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                            continue;
+                        }
+                        Err(e) => {
+                            return (bytes, Err(e));
+                        }
                     }
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-
-                let (stdout_bytes, stdout_res) =
-                    stdout_handle
-                        .join()
-                        .map_err(|_| RunnerError::ExecutionFailed {
-                            program: program_display.clone(),
-                            message: "Stdout reader thread panicked".to_string(),
-                        })?;
-                stdout_res.map_err(|e| RunnerError::ExecutionFailed {
-                    program: program_display.clone(),
-                    message: format!("Failed reading stdout: {e}"),
-                })?;
-
-                let (stderr_bytes, stderr_res) =
-                    stderr_handle
-                        .join()
-                        .map_err(|_| RunnerError::ExecutionFailed {
-                            program: program_display.clone(),
-                            message: "Stderr reader thread panicked".to_string(),
-                        })?;
-                stderr_res.map_err(|e| RunnerError::ExecutionFailed {
-                    program: program_display.clone(),
-                    message: format!("Failed reading stderr: {e}"),
-                })?;
-
-                let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
-                let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
-                let code = status.code().unwrap_or(-1);
-
-                if !status.success() {
-                    Err(RunnerError::NonZeroExit {
-                        program: program_display,
-                        code,
-                        stderr,
-                    })
-                } else {
-                    Ok(CommandOutput {
-                        status_code: code,
-                        stdout,
-                        stderr,
-                    })
                 }
             }
-            Ok(None) => {
-                // Command wait timed out: kill process group, reap child, and join reader threads
-                kill_all(&mut child);
-                let _ = child.wait();
-                let _ = stdout_handle.join();
-                let _ = stderr_handle.join();
-                Err(RunnerError::Timeout {
-                    program: program_display,
-                    timeout: self.timeout,
-                })
-            }
-            Err(e) => {
-                kill_all(&mut child);
-                let _ = child.wait();
-                let _ = stdout_handle.join();
-                let _ = stderr_handle.join();
-                Err(RunnerError::ExecutionFailed {
-                    program: program_display,
-                    message: e.to_string(),
-                })
+        }
+
+        (bytes, Ok(()))
+    })
+}
+
+fn join_reader_bounded(
+    handle: std::thread::JoinHandle<ReaderOutput>,
+    stop: &Arc<AtomicBool>,
+    max_wait: Duration,
+) -> Option<ReaderJoinResult> {
+    stop.store(true, Ordering::SeqCst);
+    let start = std::time::Instant::now();
+    while !handle.is_finished() {
+        if start.elapsed() >= max_wait {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    Some(handle.join().map_err(|_| RunnerError::ExecutionFailed {
+        program: String::new(),
+        message: "Reader thread panicked".to_string(),
+    }))
+}
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn proc_listchildpids(
+        ppid: libc::pid_t,
+        buffer: *mut libc::c_void,
+        buffersize: libc::c_int,
+    ) -> libc::c_int;
+}
+
+/// Recursively discovers direct children and descendants of `root_pid`
+/// using macOS libSystem's `proc_listchildpids`.
+#[cfg(target_os = "macos")]
+fn collect_child_pids(root_pid: i32, tracked: &mut Vec<i32>) {
+    let mut to_check = vec![root_pid];
+    let mut checked = std::collections::HashSet::new();
+    let mut buf = [0i32; 128];
+
+    while let Some(parent) = to_check.pop() {
+        if !checked.insert(parent) {
+            continue;
+        }
+        let count = unsafe {
+            proc_listchildpids(
+                parent,
+                buf.as_mut_ptr() as *mut libc::c_void,
+                std::mem::size_of_val(&buf) as libc::c_int,
+            )
+        };
+        if count > 0 {
+            for &child_pid in &buf[..count as usize] {
+                if child_pid > 0 && !tracked.contains(&child_pid) {
+                    tracked.push(child_pid);
+                    to_check.push(child_pid);
+                }
             }
         }
     }
 }
 
-/// Recursively terminates a process and any descendants, including descendants
-/// that detached into their own process groups or sessions (via setsid/setpgid).
-fn kill_process_tree(pid: u32) {
-    // 1. Discover descendants via pgrep -P WHILE parent is still alive
-    // (once parent terminates, children are immediately re-parented to PID 1 by the kernel).
-    if let Ok(output) = Command::new("pgrep")
-        .args(["-P", &pid.to_string()])
-        .output()
-    {
-        if output.status.success() {
-            let s = String::from_utf8_lossy(&output.stdout);
-            for line in s.lines() {
-                if let Ok(child_pid) = line.trim().parse::<i32>() {
-                    kill_process_tree(child_pid as u32);
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::kill(-child_pid, libc::SIGKILL);
-                        libc::kill(child_pid, libc::SIGKILL);
-                    }
-                }
-            }
-        }
-    }
+#[cfg(not(target_os = "macos"))]
+fn collect_child_pids(_root_pid: i32, _tracked: &mut Vec<i32>) {}
 
-    // 2. Terminate the parent process group and process
+/// Terminates processes that the runner provably owns: the direct child, the process group
+/// created during spawn (PGID = pid), and all tracked descendants discovered via `proc_listchildpids`
+/// (including those that detached into a new session via setsid(2)).
+fn kill_owned_processes(pid: u32, tracked_descendants: &[i32], child: &mut std::process::Child) {
     #[cfg(unix)]
     unsafe {
         libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
         libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        for &descendant_pid in tracked_descendants {
+            if descendant_pid > 0 && descendant_pid != pid as i32 {
+                libc::kill(-descendant_pid, libc::SIGKILL);
+                libc::kill(descendant_pid, libc::SIGKILL);
+            }
+        }
     }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 type CommandKey = (String, Vec<String>);

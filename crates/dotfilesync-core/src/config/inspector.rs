@@ -117,6 +117,11 @@ impl<'a> ConfigInspector<'a> {
             Ok(meta) => Some(meta),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => {
+                let diagnostic = if e.raw_os_error() == Some(libc::EILSEQ) {
+                    format!("Cannot read source file in repository (illegal byte sequence / EILSEQ): {e}")
+                } else {
+                    format!("Cannot read source file in repository: {e}")
+                };
                 return ObservedConfigFile {
                     source_path,
                     target_path,
@@ -126,7 +131,7 @@ impl<'a> ConfigInspector<'a> {
                     target_size: None,
                     is_symlink: false,
                     symlink_target: None,
-                    diagnostic: Some(format!("Cannot read source file in repository: {e}")),
+                    diagnostic: Some(diagnostic),
                 };
             }
         };
@@ -214,6 +219,13 @@ impl<'a> ConfigInspector<'a> {
                 };
             }
             Err(e) => {
+                let diagnostic = if e.raw_os_error() == Some(libc::EILSEQ) {
+                    format!(
+                        "Cannot read target file on machine (illegal byte sequence / EILSEQ): {e}"
+                    )
+                } else {
+                    format!("Cannot read target file on machine: {e}")
+                };
                 return ObservedConfigFile {
                     source_path,
                     target_path,
@@ -223,7 +235,7 @@ impl<'a> ConfigInspector<'a> {
                     target_size: None,
                     is_symlink: false,
                     symlink_target: None,
-                    diagnostic: Some(format!("Cannot read target file on machine: {e}")),
+                    diagnostic: Some(diagnostic),
                 };
             }
         };

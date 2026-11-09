@@ -243,3 +243,15 @@ fn test_original_brewfile_preserved() {
     let after = std::fs::read_to_string(&brewfile_path).expect("Should read Brewfile");
     assert_eq!(original, after, "Brewfile must remain identical");
 }
+
+#[test]
+fn test_beginner_variable_does_not_suppress_following_brew_declaration() {
+    let content = r#"
+beginner = true
+brew "git"
+"#;
+    let res = parse_brewfile(content);
+    assert_eq!(res.formulae, vec!["git"]);
+    assert_eq!(res.unsupported_constructs.len(), 1);
+    assert_eq!(res.unsupported_constructs[0].construct_type, "unrecognized");
+}
