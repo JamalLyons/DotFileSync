@@ -175,11 +175,15 @@ Apache-2.0
 ### Architecture
 
 - **`dotfilesync-core`**: Reusable domain models, manifest schema validation, command runner abstraction with timeout protection, static Brewfile parser, filesystem inspection, and diff comparison engine. Completely UI-framework agnostic.
-- **`dotfilesync-cli`**: Command-line binary (`dotfilesync`) providing human-friendly and `--json` structured output.
+- **`dotfilesync-protocol`**: Typed, versioned local IPC protocol and blocking client shared by the CLI and the future GPUI app.
+- **`dotfilesync-daemon`**: The per-user daemon `dotfilesyncd`. It hosts the core behind an owner-only Unix socket (no TCP) and manages jobs, locks, a job journal, rotated logs, and the launchd LaunchAgent.
+- **`dotfilesync-cli`**: Command-line binary (`dotfilesync`) providing human-friendly and `--json` structured output. It is a client of the daemon, with a standalone fallback.
+
+See [docs/daemon-architecture.md](docs/daemon-architecture.md) for the process, protocol, security and state model.
 
 ### Toolchain and Building
 
-Requires **macOS** and **Rust 1.85+** (MSRV 1.85). Dotfilesync Milestone 1 is built exclusively for macOS; building on Linux or Windows is unsupported and prevented at compile time.
+Requires **macOS** and **Rust 1.85+** (MSRV 1.85). The `dotfilesync` and `dotfilesyncd` binaries are built exclusively for macOS; building them on Linux or Windows is prevented at compile time. The `dotfilesync-core` and `dotfilesync-protocol` libraries compile on any Unix, as groundwork for the headless Linux target (#12).
 
 ```bash
 # Build the workspace
@@ -236,6 +240,55 @@ When `--output <path>` is provided, `dotfilesync` explicitly creates a **new** m
 cargo run -p dotfilesync-cli -- import-brewfile --brewfile Brewfile --output dotfilesync.new.toml
 ```
 
+### Daemon (`dotfilesyncd`) and service management
+
+`scan` and `status` take `--mode auto|daemon|standalone` (default `auto`):
+
+| Mode | Behavior |
+|---|---|
+| `auto` | Runs in `dotfilesyncd` when it is running. Otherwise runs in-process and prints a one-line note on stderr. |
+| `daemon` | Requires the daemon. Add `--detach` to print the job ID and return immediately. |
+| `standalone` | Never contacts the daemon. |
+
+The report on stdout is the same in every mode. Neither command ever installs, loads or starts the service.
+
+Daemon jobs keep running when the CLI exits (Ctrl-C only detaches). Reconnect from any terminal:
+
+```bash
+dotfilesync jobs list
+dotfilesync jobs watch <job-id>     # progress since the start, then waits
+dotfilesync jobs result <job-id> --json
+dotfilesync jobs cancel <job-id>    # also stops the job's brew subprocess
+```
+
+First-time setup on a Mac:
+
+```bash
+cargo build --release --workspace
+# 1. Write ~/Library/LaunchAgents/io.github.jamallyons.dotfilesyncd.plist (does NOT start anything).
+#    Add --start-at-login to opt in to automatic start at login.
+./target/release/dotfilesync service install
+# 2. Load and start it now.
+./target/release/dotfilesync service start
+# 3. Inspect: installed? loaded in launchd? reachable?
+./target/release/dotfilesync service status
+# Stop for this session (stays installed), or remove the definition.
+./target/release/dotfilesync service stop
+./target/release/dotfilesync service uninstall   # keeps state/logs, configs and repos
+```
+
+You can also run the daemon in the foreground with `./target/release/dotfilesyncd`.
+
+The daemon keeps its state in `~/Library/Application Support/dotfilesync`, which must be mode 0700. You can override the location with `--data-dir` or `DOTFILESYNC_DATA_DIR`. It contains:
+
+| Path | Contents |
+|---|---|
+| `run/` | Socket and lock file |
+| `state/jobs.jsonl` | Job metadata only |
+| `logs/` | Rotated, redacted logs |
+
+A manual QA checklist is in [docs/daemon-manual-qa.md](docs/daemon-manual-qa.md).
+
 ### Manifest Schema (`dotfilesync.toml`)
 
 The repository includes a versioned `dotfilesync.toml` manifest modeling the current `Brewfile`, `fish/` configuration, and `zed/settings.json`.
@@ -256,6 +309,7 @@ Key capabilities:
 
 - **Read-Only Inspection / Safe Creation**: `scan` and `status` are strictly read-only and never install packages, copy files to system locations, or mutate existing system configurations. `import-brewfile` creates a new manifest skeleton file only when `--output` is explicitly passed and refuses to overwrite existing files.
 - **No GUI**: GPUI interface integration is slated for future milestones.
+- **Daemon scope**: The daemon serves `scan` and `status` jobs only. Plan/apply, toolchains, config editing, sync and the watcher are reserved in the protocol and answered with an explicit `unsupported_operation` until their issues land. It has no crash auto-restart (no launchd `KeepAlive`), and it supports no Linux service yet.
 - **No Remote Git Sync**: Future state sync will use a dedicated user-owned private state repository rather than personal branches in this repo.
 - **Language Managers**: Integrations for `fnm`, `nvm`, and Java manager diagnostics will be introduced in subsequent milestones.
 

@@ -1,11 +1,14 @@
-#[cfg(not(target_os = "macos"))]
-compile_error!("dotfilesync is designed exclusively for macOS in Milestone 1; building on Linux or Windows is unsupported.");
+// The core library is portable across Unix so the daemon protocol and a future headless Linux
+// target (#12) can build on it. The shipped CLI and daemon binaries remain macOS-only.
+#[cfg(not(unix))]
+compile_error!("dotfilesync-core requires a Unix platform; Windows is unsupported.");
 
 pub mod brew;
 pub mod comparison;
 pub mod config;
 pub mod diagnostic;
 pub mod manifest;
+pub mod ops;
 pub mod scan;
 
 pub use brew::{
@@ -25,4 +28,5 @@ pub use manifest::{
     ManifestError, ManifestMetadata, PackageManagersSection, TrackedFile, ValidationError,
     CURRENT_SCHEMA_VERSION,
 };
+pub use ops::{run_scan, run_status, OpError, OpStage, ScanInput, StatusInput};
 pub use scan::ScanReport;

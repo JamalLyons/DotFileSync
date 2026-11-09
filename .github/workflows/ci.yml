@@ -79,6 +79,18 @@ jobs:
           grep '"homebrew_available": true' "$RUNNER_TEMP/status_out.json"
           grep '"packages_unknown": 0' "$RUNNER_TEMP/status_out.json"
 
+  portable-libraries-linux:
+    name: Portable core/protocol libraries (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Check portable libraries (binaries stay macOS-only)
+        run: cargo check -p dotfilesync-core -p dotfilesync-protocol -p dotfilesync-daemon --lib --locked
+      - name: Run protocol unit tests (framing, messages, path checks, SO_PEERCRED)
+        run: cargo test -p dotfilesync-protocol --lib --locked
+
   verify-unsupported-platforms:
     name: Verify Unsupported Platforms Fail (Linux & Windows)
     runs-on: ${{ matrix.os }}

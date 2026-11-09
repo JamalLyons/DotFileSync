@@ -28,6 +28,9 @@ pub enum RunnerError {
     #[error("Command '{program}' timed out after {}", format_timeout(*.timeout))]
     Timeout { program: String, timeout: Duration },
 
+    #[error("Command '{program}' was cancelled")]
+    Cancelled { program: String },
+
     #[error("Command '{program}' exited with code {code}: {stderr}")]
     NonZeroExit {
         program: String,
@@ -61,6 +64,7 @@ pub trait CommandRunner: Send + Sync {
 pub struct RealCommandRunner {
     timeout: Duration,
     brew_bin_override: Option<PathBuf>,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl Default for RealCommandRunner {
@@ -68,6 +72,7 @@ impl Default for RealCommandRunner {
         Self {
             timeout: Duration::from_secs(30),
             brew_bin_override: None,
+            cancel: None,
         }
     }
 }
@@ -77,12 +82,27 @@ impl RealCommandRunner {
         Self {
             timeout,
             brew_bin_override: None,
+            cancel: None,
         }
     }
 
     pub fn with_brew_binary(mut self, path: PathBuf) -> Self {
         self.brew_bin_override = Some(path);
         self
+    }
+
+    /// Attach a cancellation flag. When the flag becomes `true` while a command is running,
+    /// the runner terminates the processes it owns (same cleanup as the timeout path) and
+    /// returns [`RunnerError::Cancelled`]. A command is not started if the flag is already set.
+    pub fn with_cancellation(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
     }
 }
 
@@ -134,6 +154,12 @@ impl CommandRunner for RealCommandRunner {
 
     fn run_path(&self, program: &Path, args: &[&OsStr]) -> Result<CommandOutput, RunnerError> {
         let start_time = std::time::Instant::now();
+
+        if self.is_cancelled() {
+            return Err(RunnerError::Cancelled {
+                program: program.display().to_string(),
+            });
+        }
 
         let exec_path = if let Some(prog_str) = program.to_str() {
             self.find_executable(prog_str)
@@ -216,6 +242,16 @@ impl CommandRunner for RealCommandRunner {
 
         let mut status_opt = None;
         while start_time.elapsed() < self.timeout {
+            if self.is_cancelled() {
+                stop_stdout.store(true, Ordering::SeqCst);
+                stop_stderr.store(true, Ordering::SeqCst);
+                kill_owned_processes(pid, &tracked_descendants, &mut child);
+                let _ = join_reader_bounded(stdout_handle, &stop_stdout, Duration::from_millis(50));
+                let _ = join_reader_bounded(stderr_handle, &stop_stderr, Duration::from_millis(50));
+                return Err(RunnerError::Cancelled {
+                    program: program_display,
+                });
+            }
             collect_child_pids(pid as i32, &mut tracked_descendants);
             let remaining = self.timeout.saturating_sub(start_time.elapsed());
             let slice = Duration::from_millis(20).min(remaining);
@@ -246,7 +282,8 @@ impl CommandRunner for RealCommandRunner {
             // Wait for output-reader threads, bounded by overall call deadline to prevent
             // lingering descendants from keeping pipes open indefinitely.
             while !stdout_handle.is_finished() || !stderr_handle.is_finished() {
-                if start_time.elapsed() >= self.timeout {
+                if self.is_cancelled() || start_time.elapsed() >= self.timeout {
+                    let cancelled = self.is_cancelled();
                     stop_stdout.store(true, Ordering::SeqCst);
                     stop_stderr.store(true, Ordering::SeqCst);
                     kill_owned_processes(pid, &tracked_descendants, &mut child);
@@ -254,6 +291,11 @@ impl CommandRunner for RealCommandRunner {
                         join_reader_bounded(stdout_handle, &stop_stdout, Duration::from_millis(50));
                     let _ =
                         join_reader_bounded(stderr_handle, &stop_stderr, Duration::from_millis(50));
+                    if cancelled {
+                        return Err(RunnerError::Cancelled {
+                            program: program_display,
+                        });
+                    }
                     return Err(RunnerError::Timeout {
                         program: program_display,
                         timeout: self.timeout,
