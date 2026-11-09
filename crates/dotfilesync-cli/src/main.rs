@@ -6,15 +6,20 @@ mod output;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "dotfilesync",
     version,
     about = "macOS developer environment manager (read-only foundation)",
-    long_about = "dotfilesync inspects, tracks, and safely reports drift across Homebrew packages and explicit configuration files without modifying machine state."
+    long_about = "dotfilesync inspects, tracks, and safely reports drift across Homebrew packages and explicit configuration files without modifying machine state.\n\nscan and status use the per-user dotfilesyncd daemon when it is running and otherwise run in this process. Nothing listens on the network."
 )]
 struct Cli {
+    /// dotfilesyncd data directory (default: $DOTFILESYNC_DATA_DIR or ~/Library/Application Support/dotfilesync)
+    #[arg(long, global = true)]
+    data_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -29,14 +34,26 @@ enum Commands {
 
     /// Statically parse and import package declarations from a Brewfile
     ImportBrewfile(commands::import::ImportArgs),
+
+    /// Inspect, follow, or cancel jobs running in dotfilesyncd
+    #[command(subcommand)]
+    Jobs(commands::jobs::JobsCommand),
+
+    /// Manage the per-user dotfilesyncd LaunchAgent (install never starts it; login start is opt-in)
+    #[command(subcommand)]
+    Service(commands::service::ServiceCommand),
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let data_dir = cli.data_dir.as_deref();
 
     match cli.command {
-        Commands::Scan(args) => commands::scan::execute(args),
-        Commands::Status(args) => commands::status::execute(args),
+        Commands::Scan(args) => commands::scan::execute(args, data_dir),
+        Commands::Status(args) => commands::status::execute(args, data_dir),
+        // Always local: writes only with --output, via create_new (never overwrites).
         Commands::ImportBrewfile(args) => commands::import::execute(args),
+        Commands::Jobs(cmd) => commands::jobs::execute(cmd, data_dir),
+        Commands::Service(cmd) => commands::service::execute(cmd, data_dir),
     }
 }

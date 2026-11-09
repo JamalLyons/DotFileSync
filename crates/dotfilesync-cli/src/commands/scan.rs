@@ -1,10 +1,11 @@
 use anyhow::Result;
 use clap::Args;
-use dotfilesync_core::{
-    discover_homebrew, load_manifest, ConfigInspector, Diagnostic, RealCommandRunner, ScanReport,
-};
+use dotfilesync_core::{run_scan, RealCommandRunner, ScanInput, ScanReport};
+use dotfilesync_protocol::{JobOutput, JobSpec};
 use std::path::{Path, PathBuf};
 
+use super::mode::{self, Mode, Route};
+use super::remote::{self, Remote};
 use crate::output::{human, json};
 
 #[derive(Debug, Args)]
@@ -25,81 +26,78 @@ pub struct ScanArgs {
     #[arg(long)]
     pub repo_root: Option<PathBuf>,
 
-    /// Override Homebrew binary path (primarily for testing and controlled environments)
+    /// Where to run: auto (daemon if running, else in-process), daemon, or standalone
+    #[arg(long, value_enum, default_value_t = Mode::Auto)]
+    pub mode: Mode,
+
+    /// With the daemon: start the job, print its id, and return without waiting
+    #[arg(long)]
+    pub detach: bool,
+
+    /// Override Homebrew binary path (standalone only; primarily for testing)
     #[arg(long, hide = true)]
     pub brew_bin: Option<PathBuf>,
 }
 
-pub fn execute(args: ScanArgs) -> Result<()> {
-    let mut runner = RealCommandRunner::default();
+pub fn execute(args: ScanArgs, data_dir: Option<&Path>) -> Result<()> {
     let brew_bin = args
         .brew_bin
+        .clone()
         .or_else(|| std::env::var_os("DOTFILESYNC_BREW_BIN").map(PathBuf::from));
-    if let Some(bin) = brew_bin {
-        runner = runner.with_brew_binary(bin);
-    }
-    let homebrew_result = discover_homebrew(&runner);
-
-    let home_dir = args
+    let home = args
         .home
+        .clone()
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."));
-
-    // Check if manifest is specified or default `./dotfilesync.toml` exists
-    let manifest_path = args.manifest.or_else(|| {
+    // Use the explicit manifest, or `./dotfilesync.toml` if it exists.
+    let manifest = args.manifest.clone().or_else(|| {
         let default_p = PathBuf::from("dotfilesync.toml");
-        if default_p.is_file() {
-            Some(default_p)
-        } else {
-            None
-        }
+        default_p.is_file().then_some(default_p)
     });
 
-    let mut configs = Vec::new();
-    let mut diagnostics = Vec::new();
-
-    if let Some(manifest_path) = manifest_path {
-        match load_manifest(&manifest_path) {
-            Ok(manifest) => {
-                let repo_root = args.repo_root.unwrap_or_else(|| {
-                    manifest_path
-                        .parent()
-                        .map(Path::to_path_buf)
-                        .filter(|p| !p.as_os_str().is_empty())
-                        .unwrap_or_else(|| PathBuf::from("."))
-                });
-
-                let inspector = ConfigInspector::new(
-                    &repo_root,
-                    &home_dir,
-                    &manifest.exclusions,
-                    &manifest.overrides,
-                );
-                configs = inspector.inspect_files(&manifest.files);
+    let standalone_only = brew_bin.as_ref().map(|_| "--brew-bin/DOTFILESYNC_BREW_BIN");
+    let report: ScanReport = match mode::route(args.mode, data_dir, "scan", standalone_only)? {
+        Route::Standalone { note } => {
+            if let Some(n) = note {
+                eprintln!("{n}");
             }
-            Err(e) => {
-                diagnostics.push(
-                    Diagnostic::error(format!(
-                        "Failed to load manifest at '{}'",
-                        manifest_path.display()
-                    ))
-                    .with_detail(e.to_string()),
-                );
+            let mut runner = RealCommandRunner::default();
+            if let Some(bin) = brew_bin {
+                runner = runner.with_brew_binary(bin);
+            }
+            let input = ScanInput {
+                manifest,
+                home,
+                repo_root: args.repo_root.clone(),
+            };
+            run_scan(&input, &runner, &mut |_| {}, &|| false)?
+        }
+        Route::Daemon(mut client) => {
+            let input = ScanInput {
+                manifest: manifest.as_deref().map(mode::absolute).transpose()?,
+                home: mode::absolute(&home)?,
+                repo_root: args.repo_root.as_deref().map(mode::absolute).transpose()?,
+            };
+            match remote::run_job(&mut client, JobSpec::Scan(input), args.detach, args.json)? {
+                Remote::Detached(job) => {
+                    println!("{}", job.job_id);
+                    return Ok(());
+                }
+                Remote::Finished(JobOutput::Scan { report }) => report,
+                Remote::Finished(other) => return Err(remote::unexpected(&other)),
+                Remote::Failed(job) => return Err(remote::failure(&job)),
             }
         }
+    };
+
+    print_report(&report, args.json)
+}
+
+pub fn print_report(report: &ScanReport, as_json: bool) -> Result<()> {
+    if as_json {
+        println!("{}", json::render_json(report)?);
     } else {
-        diagnostics.push(Diagnostic::info(
-            "No manifest specified or found; only Homebrew packages were scanned. Use --manifest <path> to inspect tracked configs.",
-        ));
+        println!("{}", human::render_scan_report(report));
     }
-
-    let report = ScanReport::new(homebrew_result, configs, diagnostics);
-
-    if args.json {
-        println!("{}", json::render_json(&report)?);
-    } else {
-        println!("{}", human::render_scan_report(&report));
-    }
-
     Ok(())
 }

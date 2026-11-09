@@ -209,6 +209,8 @@ dependencies = [
  "assert_cmd",
  "clap",
  "dotfilesync-core",
+ "dotfilesync-daemon",
+ "dotfilesync-protocol",
  "predicates",
  "serde",
  "serde_json",
@@ -229,6 +231,33 @@ dependencies = [
  "thiserror",
  "toml",
  "wait-timeout",
+]
+
+[[package]]
+name = "dotfilesync-daemon"
+version = "0.1.0"
+dependencies = [
+ "dotfilesync-core",
+ "dotfilesync-protocol",
+ "hex",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "dotfilesync-protocol"
+version = "0.1.0"
+dependencies = [
+ "dotfilesync-core",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

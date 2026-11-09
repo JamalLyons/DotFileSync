@@ -11,6 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 dotfilesync-core = { path = "../dotfilesync-core" }
+dotfilesync-protocol = { path = "../dotfilesync-protocol" }
+dotfilesync-daemon = { path = "../dotfilesync-daemon" }
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -20,3 +22,4 @@ anyhow = "1.0"
 tempfile = "3.17"
 assert_cmd = "2.0"
 predicates = "3.1"
+serde_json = "1.0"

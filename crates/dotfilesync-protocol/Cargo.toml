@@ -1,0 +1,17 @@
+[package]
+name = "dotfilesync-protocol"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Typed local IPC protocol and client for dotfilesyncd"
+
+[dependencies]
+dotfilesync-core = { path = "../dotfilesync-core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.17"

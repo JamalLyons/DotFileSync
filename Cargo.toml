@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "crates/dotfilesync-core",
+    "crates/dotfilesync-protocol",
+    "crates/dotfilesync-daemon",
     "crates/dotfilesync-cli",
 ]
 resolver = "2"
