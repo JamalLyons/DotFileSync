@@ -16,6 +16,7 @@ fn scan_spec(env: &Env) -> JobSpec {
         manifest: None,
         home: env.home.clone(),
         repo_root: None,
+        profile: None,
     })
 }
 
@@ -51,6 +52,7 @@ fn scan_job_matches_standalone_core_output() {
             manifest: None,
             home: env.home.clone(),
             repo_root: None,
+            profile: None,
         },
         &runner,
         &mut |_| {},
@@ -78,6 +80,7 @@ fn status_job_with_fixture_manifest_and_manifest_failure() {
             manifest,
             home: env.home.clone(),
             repo_root: None,
+            profile: None,
         }))
         .unwrap();
     c.watch_job(&job.job_id, 0, &mut |_| {}).unwrap();
@@ -91,6 +94,7 @@ fn status_job_with_fixture_manifest_and_manifest_failure() {
             manifest: env.tmp.path().join("missing.toml"),
             home: env.home.clone(),
             repo_root: None,
+            profile: None,
         }))
         .unwrap();
     let done = c.watch_job(&bad.job_id, 0, &mut |_| {}).unwrap();

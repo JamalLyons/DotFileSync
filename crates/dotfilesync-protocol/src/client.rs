@@ -11,6 +11,7 @@ use crate::messages::*;
 use crate::paths::{check_private_dir, DataLayout, DirState, PathError};
 use crate::peer::{current_euid, peer_euid};
 use crate::{MAX_REQUEST_FRAME, MAX_RESPONSE_FRAME, PROTOCOL_VERSION};
+use dotfilesync_core::PlanInput;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -278,6 +279,66 @@ impl Client {
                 ServerFrame::Error { error } => return Err(ClientError::Remote(error)),
                 _ => {}
             }
+        }
+    }
+
+    pub fn plan_create(&mut self, input: PlanInput) -> Result<JobSnapshot, ClientError> {
+        expect_job(self.call(Request::PlanCreate { input })?)
+    }
+
+    pub fn plan_approve(
+        &mut self,
+        plan_id: &str,
+        digest: &str,
+    ) -> Result<ApprovalGrant, ClientError> {
+        match self.call(Request::PlanApprove {
+            plan_id: plan_id.into(),
+            digest: digest.into(),
+        })? {
+            Response::Approval(grant) => Ok(grant),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    pub fn plan_apply(
+        &mut self,
+        plan_id: &str,
+        token: &str,
+        allow_sudo: bool,
+    ) -> Result<JobSnapshot, ClientError> {
+        expect_job(self.call(Request::PlanApply {
+            plan_id: plan_id.into(),
+            token: token.into(),
+            allow_sudo,
+        })?)
+    }
+
+    pub fn plan_resume(
+        &mut self,
+        run_id: &str,
+        token: &str,
+        allow_sudo: bool,
+    ) -> Result<JobSnapshot, ClientError> {
+        expect_job(self.call(Request::PlanResume {
+            run_id: run_id.into(),
+            token: token.into(),
+            allow_sudo,
+        })?)
+    }
+
+    pub fn plan_runs(&mut self) -> Result<Vec<RunSummary>, ClientError> {
+        match self.call(Request::PlanRuns {})? {
+            Response::Runs { runs } => Ok(runs),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    pub fn plan_run_status(&mut self, run_id: &str) -> Result<RunView, ClientError> {
+        match self.call(Request::PlanRunStatus {
+            run_id: run_id.into(),
+        })? {
+            Response::Run(view) => Ok(view),
+            other => Err(unexpected(other)),
         }
     }
 

@@ -170,6 +170,7 @@ fn state_and_logs_omit_config_bodies_paths_and_secrets() {
             manifest: Some(manifest.clone()),
             home: env.home.clone(),
             repo_root: None,
+            profile: None,
         }))
         .unwrap();
     c.watch_job(&job.job_id, 0, &mut |_| {}).unwrap();
@@ -236,6 +237,7 @@ fn daemon_binary_opens_no_tcp_or_udp_sockets() {
             manifest: None,
             home: env.home.clone(),
             repo_root: None,
+            profile: None,
         }))
         .unwrap();
     c.watch_job(&job.job_id, 0, &mut |_| {}).unwrap();
@@ -271,6 +273,7 @@ fn crash_recovery_marks_running_job_interrupted_without_replay() {
             manifest: None,
             home: env.home.clone(),
             repo_root: None,
+            profile: None,
         }))
         .unwrap()
         .job_id;

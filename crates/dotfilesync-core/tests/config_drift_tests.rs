@@ -49,18 +49,27 @@ fn test_config_matching_and_changed_and_missing() {
             target: "~/.config/match.conf".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
         TrackedFile {
             source: "config/drift.conf".into(),
             target: "~/.config/drift.conf".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
         TrackedFile {
             source: "config/missing.conf".into(),
             target: "~/.config/missing.conf".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
     ];
 
@@ -107,6 +116,9 @@ fn test_machine_local_override_is_preserved_and_never_hashed() {
         target: "~/.config/fish/conf.d/local.fish".into(),
         machine_local: true,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     };
 
     let observed = inspector.inspect_file(&file);
@@ -127,6 +139,9 @@ fn test_machine_local_override_is_preserved_and_never_hashed() {
         target: "~/.config/fish/conf.d/absent.fish".into(),
         machine_local: true,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     };
     let obs_absent = inspector.inspect_file(&absent_file);
     assert_eq!(obs_absent.state, ConfigFileState::Missing);
@@ -156,18 +171,27 @@ fn test_explicit_exclusions_path_and_pattern() {
             target: "~/.config/exact_exclude.conf".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
         TrackedFile {
             source: "config/settings.backup.20261108".into(),
             target: "~/.config/settings.backup.20261108".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
         TrackedFile {
             source: "config/priv.key".into(),
             target: "~/.config/priv.key".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
     ];
 
@@ -220,6 +244,9 @@ fn test_symlink_edge_cases() {
         target: "~/.config/to_source.conf".into(),
         machine_local: false,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     };
     let obs1 = inspector.inspect_file(&file_to_source);
     assert_eq!(obs1.state, ConfigFileState::SymlinkToSource);
@@ -229,6 +256,9 @@ fn test_symlink_edge_cases() {
         target: "~/.config/to_other.conf".into(),
         machine_local: false,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     };
     let obs2 = inspector.inspect_file(&file_external);
     assert_eq!(obs2.state, ConfigFileState::SymlinkExternal);
@@ -238,6 +268,9 @@ fn test_symlink_edge_cases() {
         target: "~/.config/broken.conf".into(),
         machine_local: false,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     };
     let obs3 = inspector.inspect_file(&file_broken);
     assert_eq!(obs3.state, ConfigFileState::BrokenSymlink);
@@ -283,6 +316,9 @@ fn test_source_symlinks_escaping_repo_root_are_rejected() {
         target: "~/.config/target1.conf".into(),
         machine_local: false,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     };
     let obs1 = inspector.inspect_file(&file1);
     assert_eq!(obs1.state, ConfigFileState::SourceOutsideRoot);
@@ -295,6 +331,9 @@ fn test_source_symlinks_escaping_repo_root_are_rejected() {
         target: "~/.config/target2.conf".into(),
         machine_local: false,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     };
     let obs2 = inspector.inspect_file(&file2);
     assert_eq!(obs2.state, ConfigFileState::SourceOutsideRoot);
@@ -322,12 +361,18 @@ fn test_status_semantics_for_machine_local_and_excluded() {
             target: "~/.config/local.conf".into(),
             machine_local: true,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
         TrackedFile {
             source: "excluded.conf".into(),
             target: "~/.config/excluded.conf".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
     ];
 
@@ -380,6 +425,9 @@ fn test_missing_source_in_repo() {
         target: "~/.config/something.conf".into(),
         machine_local: false,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     };
 
     let observed = inspector.inspect_file(&file);
@@ -420,6 +468,9 @@ fn test_native_path_preservation_in_supported_flow() {
         target: "~/.config/fish.conf".into(),
         machine_local: false,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     };
 
     let observed = inspector.inspect_file(&tracked);
@@ -502,6 +553,9 @@ fn test_apfs_filesystem_utf8_restriction_verified_honestly() {
                 target: "~/non_utf8_%FF_test".into(),
                 machine_local: false,
                 description: None,
+
+                mode: Default::default(),
+                os: None,
             };
             let observed = inspector.inspect_file(&tracked);
             assert_eq!(observed.state, ConfigFileState::Missing);
@@ -535,6 +589,9 @@ fn test_manifest_percent_encoded_path_bytes() {
         target: "~/.config/custom_%FE.conf".into(),
         machine_local: false,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     };
 
     let observed = inspector.inspect_file(&tracked);
@@ -570,12 +627,18 @@ fn test_absent_machine_local_override_is_distinguishable_from_ordinary_missing()
             target: "~/.config/ordinary_missing.conf".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
         TrackedFile {
             source: "fish/conf.d/local.fish".into(),
             target: "~/.config/fish/conf.d/local.fish".into(),
             machine_local: true,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
     ];
 

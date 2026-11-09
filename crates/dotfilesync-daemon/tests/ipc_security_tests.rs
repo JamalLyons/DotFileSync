@@ -93,10 +93,10 @@ fn request_cannot_claim_a_uid() {
     let env = Env::new(Brew::Fast);
     let _d = Running::start(with_auth(env.config(), FixedUid(current_euid() + 7)));
     let mut s = raw(&env.layout);
-    send_json(
-        &mut s,
-        &json!({"type":"hello","protocol_version":1,"client":"x","uid":current_euid()}),
-    );
+    // The daemon rejects a foreign peer on accept and may close before our hello is written,
+    // so the write can race to EPIPE; the queued Unauthorized frame is still readable.
+    let hello = json!({"type":"hello","protocol_version":1,"client":"x","uid":current_euid()});
+    let _ = write_frame(&mut s, &serde_json::to_vec(&hello).unwrap(), usize::MAX);
     match recv(&mut s) {
         ServerFrame::Error { error } => assert_eq!(error.code, ErrorCode::Unauthorized),
         other => panic!("unexpected {other:?}"),
@@ -146,7 +146,7 @@ fn malformed_requests_get_typed_errors_and_daemon_stays_healthy() {
     }
     send_json(
         &mut s,
-        &json!({"type":"request","id":7,"op":"plan.apply","params":{}}),
+        &json!({"type":"request","id":7,"op":"runtime.x","params":{}}),
     );
     match recv(&mut s) {
         ServerFrame::Response {
@@ -154,7 +154,7 @@ fn malformed_requests_get_typed_errors_and_daemon_stays_healthy() {
             outcome: Outcome::Err(e),
         } => {
             assert_eq!(e.code, ErrorCode::UnsupportedOperation);
-            assert!(e.message.contains("#4"));
+            assert!(e.message.contains("#5"));
         }
         other => panic!("unexpected {other:?}"),
     }

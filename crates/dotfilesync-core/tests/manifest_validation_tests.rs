@@ -18,12 +18,18 @@ fn test_valid_manifest_passes_validation() {
             target: "~/.config/fish/config.fish".into(),
             machine_local: false,
             description: Some("Fish config".into()),
+
+            mode: Default::default(),
+            os: None,
         },
         TrackedFile {
             source: "zed/settings.json".into(),
             target: "~/.config/zed/settings.json".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
     ];
 
@@ -49,12 +55,18 @@ fn test_empty_source_and_target() {
             target: "~/.config/foo".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
         TrackedFile {
             source: "foo".into(),
             target: "".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
     ];
     let errs = validate_manifest(&manifest).unwrap_err();
@@ -76,12 +88,18 @@ fn test_duplicate_target_rejected() {
             target: "~/.config/common.conf".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
         TrackedFile {
             source: "bar".into(),
             target: "~/.config/common.conf".into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         },
     ];
     let errs = validate_manifest(&manifest).unwrap_err();
@@ -98,6 +116,9 @@ fn test_directory_traversal_rejected() {
         target: "~/.config/token".into(),
         machine_local: false,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     }];
     let errs = validate_manifest(&manifest).unwrap_err();
     assert!(errs
@@ -113,6 +134,9 @@ fn test_absolute_source_path_rejected() {
         target: "~/.config/evil".into(),
         machine_local: false,
         description: None,
+
+        mode: Default::default(),
+        os: None,
     }];
     let errs = validate_manifest(&manifest).unwrap_err();
     assert!(errs
@@ -136,6 +160,9 @@ fn test_sensitive_credential_paths_rejected() {
             target: tgt.into(),
             machine_local: false,
             description: None,
+
+            mode: Default::default(),
+            os: None,
         }];
         let errs = validate_manifest(&manifest).unwrap_err();
         assert!(

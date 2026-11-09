@@ -1,6 +1,6 @@
 # dotfilesync.toml — declarative developer environment manifest
-# Schema version 1
-schema_version = 1
+# Schema version 2 (profiles + setup). See docs/manifest.md.
+schema_version = 2
 
 [metadata]
 name = "my-shell"
@@ -168,6 +168,39 @@ target = "~/.config/fish/functions/serve.fish"
 source = "zed/settings.json"
 target = "~/.config/zed/settings.json"
 description = "Global Zed editor configuration"
+
+# fish/conf.d in this repo is only fnm.fish (tracked above) and local.fish
+# (machine override below). No other conf.d templates are declared.
+
+# ---------------------------------------------------------------------------
+# Setup actions (login shell + Fisher). See docs/plan-apply.md.
+# login_shell resolves to <brew prefix>/bin/<name>, not the PATH entry.
+# fisher emits install + update only when ~/.config/fish/functions/fisher.fish
+# is absent.
+# ---------------------------------------------------------------------------
+[setup]
+login_shell = "fish"
+fisher = true
+
+# ---------------------------------------------------------------------------
+# Profile selection. Unknown hostnames fall through to `default`.
+# Hostnames are matched after stripping a trailing ".local" and lowercasing.
+# ---------------------------------------------------------------------------
+[select]
+default = "personal"
+
+[select.hostnames]
+"jamals-mbp" = "personal"
+"work-mac" = "work"
+
+# Personal keeps the base layer, including game casks.
+[profiles.personal]
+
+# Work starts from the same base, adds a few work tools, and drops games.
+[profiles.work.package_managers.homebrew]
+formulae = ["awscli"]
+casks = ["slack"]
+exclude_casks = ["melonds", "minecraft", "roblox", "steam"]
 
 # ---------------------------------------------------------------------------
 # Exclusions

@@ -3,7 +3,9 @@
 //! Client → daemon: a [`ClientHello`] frame, then any number of [`RequestFrame`]s.
 //! Daemon → client: [`ServerFrame`]s (handshake ack, responses, notifications, fatal errors).
 
-use dotfilesync_core::{ScanInput, ScanReport, StatusInput, StatusReport};
+use dotfilesync_core::{
+    Plan, PlanInput, RunJournal, ScanInput, ScanReport, StatusInput, StatusReport, StepRecord,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
@@ -58,14 +60,58 @@ pub enum RequestFrameType {
 pub enum Request {
     Ping {},
     DaemonInfo {},
-    StartJob { spec: JobSpec },
-    JobStatus { job_id: String },
+    StartJob {
+        spec: JobSpec,
+    },
+    JobStatus {
+        job_id: String,
+    },
     ListJobs {},
-    JobProgress { job_id: String, since_seq: u64 },
-    WatchJob { job_id: String, since_seq: u64 },
-    JobResult { job_id: String },
-    CancelJob { job_id: String },
+    JobProgress {
+        job_id: String,
+        since_seq: u64,
+    },
+    WatchJob {
+        job_id: String,
+        since_seq: u64,
+    },
+    JobResult {
+        job_id: String,
+    },
+    CancelJob {
+        job_id: String,
+    },
     Shutdown {},
+    #[serde(rename = "plan.create")]
+    PlanCreate {
+        input: PlanInput,
+    },
+    #[serde(rename = "plan.approve")]
+    PlanApprove {
+        plan_id: String,
+        digest: String,
+    },
+    #[serde(rename = "plan.apply")]
+    PlanApply {
+        plan_id: String,
+        token: String,
+        #[serde(default)]
+        allow_sudo: bool,
+    },
+    #[serde(rename = "plan.resume")]
+    PlanResume {
+        run_id: String,
+        token: String,
+        /// Optional. Defaults to false so older clients can omit it.
+        #[serde(default)]
+        allow_sudo: bool,
+    },
+    #[serde(rename = "plan.runs")]
+    PlanRuns {},
+    #[serde(rename = "plan.run_status")]
+    PlanRunStatus {
+        run_id: String,
+    },
 }
 
 /// Operations implemented by this protocol version.
@@ -80,12 +126,17 @@ pub const IMPLEMENTED_OPS: &[&str] = &[
     "job_result",
     "cancel_job",
     "shutdown",
+    "plan.create",
+    "plan.approve",
+    "plan.apply",
+    "plan.resume",
+    "plan.runs",
+    "plan.run_status",
 ];
 
 /// Operation namespaces reserved for later issues. The daemon answers these with
 /// `unsupported_operation` and never pretends they succeeded.
 pub const RESERVED_OPS: &[(&str, &str)] = &[
-    ("plan.", "plan/approve/apply arrives with issue #4"),
     (
         "runtime.",
         "toolchain/runtime management arrives with issue #5",
@@ -113,6 +164,12 @@ impl Request {
             Request::JobResult { .. } => "job_result",
             Request::CancelJob { .. } => "cancel_job",
             Request::Shutdown {} => "shutdown",
+            Request::PlanCreate { .. } => "plan.create",
+            Request::PlanApprove { .. } => "plan.approve",
+            Request::PlanApply { .. } => "plan.apply",
+            Request::PlanResume { .. } => "plan.resume",
+            Request::PlanRuns {} => "plan.runs",
+            Request::PlanRunStatus { .. } => "plan.run_status",
         }
     }
 
@@ -198,6 +255,8 @@ impl JobSpec {
 pub enum JobKind {
     Scan,
     Status,
+    Plan,
+    Apply,
     /// A kind recorded by a newer daemon version; shown but not interpreted.
     #[serde(other)]
     Unknown,
@@ -208,6 +267,8 @@ impl fmt::Display for JobKind {
         f.write_str(match self {
             JobKind::Scan => "scan",
             JobKind::Status => "status",
+            JobKind::Plan => "plan",
+            JobKind::Apply => "apply",
             JobKind::Unknown => "unknown",
         })
     }
@@ -260,6 +321,73 @@ pub enum Response {
     },
     JobResult(JobOutput),
     ShuttingDown,
+    Approval(ApprovalGrant),
+    Runs {
+        runs: Vec<RunSummary>,
+    },
+    Run(RunView),
+}
+
+/// Single-use approval handed to the client that reviewed `digest`. The secret is the
+/// response body only — callers must not log or journal it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalGrant {
+    pub token: String,
+    pub expires_at_ms: u64,
+}
+
+/// How a durable apply run looks to a client, including after a daemon restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunViewStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+    /// The daemon stopped while this run still had unfinished steps. Resumable.
+    Interrupted,
+}
+
+impl fmt::Display for RunViewStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            RunViewStatus::Running => "running",
+            RunViewStatus::Succeeded => "succeeded",
+            RunViewStatus::Failed => "failed",
+            RunViewStatus::Cancelled => "cancelled",
+            RunViewStatus::Interrupted => "interrupted",
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunSummary {
+    pub run_id: String,
+    pub plan_id: String,
+    pub plan_digest: String,
+    pub job_id: String,
+    pub status: RunViewStatus,
+}
+
+/// A run's journal plus the status a client needs after reconnecting or restarting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunView {
+    pub run_id: String,
+    pub plan_digest: String,
+    pub steps: Vec<StepRecord>,
+    pub status: RunViewStatus,
+    pub plan_id: String,
+    pub job_id: String,
+}
+
+impl RunView {
+    pub fn journal(&self) -> RunJournal {
+        RunJournal {
+            run_id: self.run_id.clone(),
+            plan_digest: self.plan_digest.clone(),
+            steps: self.steps.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -366,6 +494,8 @@ pub struct ProgressEvent {
 pub enum JobOutput {
     Scan { report: ScanReport },
     Status { report: StatusReport },
+    Plan { plan: Plan, plan_id: String },
+    Apply { journal: RunJournal },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -389,6 +519,8 @@ pub enum ErrorCode {
     Busy,
     ShuttingDown,
     Internal,
+    PlanNotFound,
+    ApprovalRejected,
     /// An error code introduced by a newer daemon.
     #[serde(other)]
     Unknown,
@@ -437,6 +569,7 @@ mod tests {
                 manifest: PathBuf::from("/tmp/m.toml"),
                 home: PathBuf::from("/tmp/home"),
                 repo_root: None,
+                profile: None,
             }),
         };
         let frame = req.clone().into_frame(7);
@@ -445,6 +578,21 @@ mod tests {
         assert!(json.contains("\"op\":\"start_job\""));
         let decoded: RequestFrame = serde_json::from_str(&json).unwrap();
         assert_eq!(Request::from_frame(&decoded).unwrap(), req);
+
+        let plan_req = Request::PlanCreate {
+            input: PlanInput {
+                manifest: PathBuf::from("/tmp/m.toml"),
+                home: PathBuf::from("/tmp/home"),
+                repo_root: None,
+                profile: Some("work".into()),
+                upgrade: true,
+            },
+        };
+        let frame = plan_req.clone().into_frame(9);
+        assert_eq!(frame.op, "plan.create");
+        let json = serde_json::to_string(&frame).unwrap();
+        let decoded: RequestFrame = serde_json::from_str(&json).unwrap();
+        assert_eq!(Request::from_frame(&decoded).unwrap(), plan_req);
     }
 
     #[test]
@@ -463,7 +611,7 @@ mod tests {
             params,
         };
         assert_eq!(
-            Request::from_frame(&mk("plan.apply", Value::Null))
+            Request::from_frame(&mk("runtime.x", Value::Null))
                 .unwrap_err()
                 .code,
             ErrorCode::UnsupportedOperation
@@ -524,6 +672,19 @@ mod tests {
             },
             Response::JobResult(JobOutput::Scan { report }),
             Response::ShuttingDown,
+            Response::Approval(ApprovalGrant {
+                token: "secret".into(),
+                expires_at_ms: 10,
+            }),
+            Response::Runs { runs: vec![] },
+            Response::Run(RunView {
+                run_id: "r-1".into(),
+                plan_digest: "d".into(),
+                steps: vec![],
+                status: RunViewStatus::Interrupted,
+                plan_id: "p-1".into(),
+                job_id: "j-1".into(),
+            }),
         ];
         for r in responses {
             let frame = ServerFrame::Response {

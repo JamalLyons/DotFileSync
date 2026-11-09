@@ -12,6 +12,7 @@ pub mod journal;
 pub mod listener;
 pub mod locks;
 pub mod log;
+mod plans;
 pub mod redact;
 pub mod server;
 pub mod service;

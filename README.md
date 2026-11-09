@@ -170,7 +170,9 @@ Apache-2.0
 
 ## dotfilesync (Rust Environment Manager)
 
-`dotfilesync` is the macOS-first developer environment manager written in Rust, laying the foundation for a future GPUI-based environment manager. In this first milestone, `dotfilesync` provides read-only inspection commands (`scan`, `status`) and a safe Brewfile importer (`import-brewfile`) that creates new manifest files without modifying existing system configurations or tracking repositories.
+`dotfilesync` is the macOS-first developer environment manager written in Rust, laying the foundation for a future GPUI-based environment manager. `scan` and `status` stay read-only. `plan` and `apply` change the machine only after you review a plan. `import-brewfile` creates a new manifest and refuses to overwrite an existing file.
+
+Manifest profiles and the plan/apply workflow are documented in [docs/manifest.md](docs/manifest.md) and [docs/plan-apply.md](docs/plan-apply.md). `setup.sh` remains until that workflow covers the same ground.
 
 ### Architecture
 
@@ -199,7 +201,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 ### CLI Commands
 
-Commands `scan` and `status` are strictly **read-only** inspection commands. They never install software, uninstall packages, modify shell or environment files, or mutate system configurations. Meanwhile, `import-brewfile --output <path>` explicitly creates a **new** file and strictly refuses to replace or overwrite an existing file.
+Commands `scan` and `status` are strictly **read-only**. They never install software, uninstall packages, modify shell or environment files, or mutate system configurations. `import-brewfile --output <path>` creates a **new** file and refuses to replace an existing one. `plan` and `apply` are the commands that change the machine; see [Plan and apply](#plan-and-apply).
 
 #### 1. Scan (`dotfilesync scan`)
 Strictly read-only: discovers installed Homebrew formulae and casks, their observed versions, and inspects only explicitly tracked configuration paths without altering system state.
@@ -239,6 +241,19 @@ When `--output <path>` is provided, `dotfilesync` explicitly creates a **new** m
 # Parse existing Brewfile and generate a new manifest skeleton
 cargo run -p dotfilesync-cli -- import-brewfile --brewfile Brewfile --output dotfilesync.new.toml
 ```
+
+### Plan and apply
+
+`dotfilesync plan` prints the actions that would bring this machine in line with `dotfilesync.toml`. `dotfilesync apply` reviews that plan and, after you confirm, runs it through the daemon. A converged machine produces an empty plan.
+
+```bash
+dotfilesync plan [--manifest] [--profile] [--upgrade] [--json]
+dotfilesync apply [--profile] [--yes] [--allow-sudo] [--dry-run]
+dotfilesync apply --resume <run_id>
+dotfilesync runs [list|show <id>]
+```
+
+`scan` and `status` stay read-only. Apply never uses `sudo` unless you pass `--allow-sudo`, and it does not overwrite `local.fish` or other machine overrides. Details, including which actions can be undone, are in [docs/plan-apply.md](docs/plan-apply.md). The manifest schema, profiles, and merge order are in [docs/manifest.md](docs/manifest.md).
 
 ### Daemon (`dotfilesyncd`) and service management
 
@@ -291,7 +306,7 @@ A manual QA checklist is in [docs/daemon-manual-qa.md](docs/daemon-manual-qa.md)
 
 ### Manifest Schema (`dotfilesync.toml`)
 
-The repository includes a versioned `dotfilesync.toml` manifest modeling the current `Brewfile`, `fish/` configuration, and `zed/settings.json`.
+The repository includes a versioned `dotfilesync.toml` (schema version 2) modeling the current `Brewfile`, `fish/` configuration, and `zed/settings.json`, plus `personal` and `work` profiles. The schema reference is [docs/manifest.md](docs/manifest.md).
 
 Key capabilities:
 - **Explicit Tracking**: Separate repository `source` and machine `target` paths (e.g. `~/.config/fish/config.fish`).
@@ -301,15 +316,16 @@ Key capabilities:
 
 ### Existing Behaviors Preserved
 
-- **Bash Installer (`setup.sh`)**: The existing Bash bootstrapper, `Brewfile`, and helper scripts in `lib/` remain 100% untouched and fully operational.
-- **Safety First**: Inspection commands `scan` and `status` are strictly read-only with zero system mutations. `import-brewfile` only writes when `--output` is explicitly supplied, and then strictly creates a new file refusing to overwrite existing files. There are no package installs/removals, deletions, shell modifications, or `sudo` operations. File contents are never printed in scan or status output.
+- **Bash Installer (`setup.sh`)**: The existing Bash bootstrapper, `Brewfile`, and helper scripts in `lib/` remain fully operational until plan/apply covers the same steps. See the parity matrix in [docs/plan-apply.md](docs/plan-apply.md).
+- **Safety First**: `scan` and `status` are read-only. `import-brewfile` writes only when `--output` is supplied, and then only creates a new file. `apply` is the mutating command: it installs and copies only the reviewed plan, backs up files it replaces, refuses to overwrite local overrides, and does not call `sudo` unless `--allow-sudo` is set. File contents are never printed in scan or status output.
 - **Test Isolation**: All discovery and runner mechanisms are abstracted behind traits with unit fixtures and mock outputs, preventing tests from modifying or relying on actual machine state.
 
 ### Current Limitations
 
-- **Read-Only Inspection / Safe Creation**: `scan` and `status` are strictly read-only and never install packages, copy files to system locations, or mutate existing system configurations. `import-brewfile` creates a new manifest skeleton file only when `--output` is explicitly passed and refuses to overwrite existing files.
+- **Inspection stays read-only**: `scan` and `status` never install packages or copy files. `import-brewfile` creates a new manifest skeleton only when `--output` is passed and refuses to overwrite an existing file. Machine changes go through `plan` / `apply`.
 - **No GUI**: GPUI interface integration is slated for future milestones.
-- **Daemon scope**: The daemon serves `scan` and `status` jobs only. Plan/apply, toolchains, config editing, sync and the watcher are reserved in the protocol and answered with an explicit `unsupported_operation` until their issues land. It has no crash auto-restart (no launchd `KeepAlive`), and it supports no Linux service yet.
+- **Daemon scope**: The daemon serves `scan`, `status`, and plan/apply jobs. `apply` requires the daemon. Toolchains beyond Homebrew, config editing, sync, and the watcher are still out of scope. It has no crash auto-restart (no launchd `KeepAlive`), and it supports no Linux service yet.
+- **Still on `setup.sh`**: Node via fnm and pnpm, the latest Xcode install, and LM Studio model downloads are not plan actions yet (issue #5).
 - **No Remote Git Sync**: Future state sync will use a dedicated user-owned private state repository rather than personal branches in this repo.
 - **Language Managers**: Integrations for `fnm`, `nvm`, and Java manager diagnostics will be introduced in subsequent milestones.
 

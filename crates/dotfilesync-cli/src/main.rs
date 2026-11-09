@@ -12,8 +12,8 @@ use std::path::PathBuf;
 #[command(
     name = "dotfilesync",
     version,
-    about = "macOS developer environment manager (read-only foundation)",
-    long_about = "dotfilesync inspects, tracks, and safely reports drift across Homebrew packages and explicit configuration files without modifying machine state.\n\nscan and status use the per-user dotfilesyncd daemon when it is running and otherwise run in this process. Nothing listens on the network."
+    about = "macOS developer environment manager",
+    long_about = "dotfilesync inspects, tracks, and safely reports drift across Homebrew packages and explicit configuration files.\n\nplan shows what would change. apply changes the machine only through dotfilesyncd, after approval, with backups and locks.\n\nscan, status, and plan use the per-user daemon when it is running and otherwise run in this process. apply requires the daemon. Nothing listens on the network."
 )]
 struct Cli {
     /// dotfilesyncd data directory (default: $DOTFILESYNC_DATA_DIR or ~/Library/Application Support/dotfilesync)
@@ -31,6 +31,15 @@ enum Commands {
 
     /// Compare desired state from manifest with observed system state
     Status(commands::status::StatusArgs),
+
+    /// Show the changes that would bring this machine in line with the manifest
+    Plan(commands::plan::PlanArgs),
+
+    /// Apply a reviewed plan through dotfilesyncd (requires the daemon)
+    Apply(commands::apply::ApplyArgs),
+
+    /// List or show apply runs recorded by dotfilesyncd
+    Runs(commands::runs::RunsArgs),
 
     /// Statically parse and import package declarations from a Brewfile
     ImportBrewfile(commands::import::ImportArgs),
@@ -51,6 +60,9 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Scan(args) => commands::scan::execute(args, data_dir),
         Commands::Status(args) => commands::status::execute(args, data_dir),
+        Commands::Plan(args) => commands::plan::execute(args, data_dir),
+        Commands::Apply(args) => commands::apply::execute(args, data_dir),
+        Commands::Runs(args) => commands::runs::execute(args, data_dir),
         // Always local: writes only with --output, via create_new (never overwrites).
         Commands::ImportBrewfile(args) => commands::import::execute(args),
         Commands::Jobs(cmd) => commands::jobs::execute(cmd, data_dir),

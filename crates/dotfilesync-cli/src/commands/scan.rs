@@ -69,6 +69,7 @@ pub fn execute(args: ScanArgs, data_dir: Option<&Path>) -> Result<()> {
                 manifest,
                 home,
                 repo_root: args.repo_root.clone(),
+                profile: None,
             };
             run_scan(&input, &runner, &mut |_| {}, &|| false)?
         }
@@ -77,6 +78,7 @@ pub fn execute(args: ScanArgs, data_dir: Option<&Path>) -> Result<()> {
                 manifest: manifest.as_deref().map(mode::absolute).transpose()?,
                 home: mode::absolute(&home)?,
                 repo_root: args.repo_root.as_deref().map(mode::absolute).transpose()?,
+                profile: None,
             };
             match remote::run_job(&mut client, JobSpec::Scan(input), args.detach, args.json)? {
                 Remote::Detached(job) => {

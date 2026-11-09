@@ -6,16 +6,24 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use dotfilesync_core::{run_scan, run_status, OpError, OpStage, RealCommandRunner};
+use dotfilesync_core::{
+    apply_plan, current_hostname, resume_run, run_plan, run_scan, run_status, ApplyContext,
+    ApplyError, OpError, OpStage, Plan, PlanInput, RealCommandRunner, StepRecord, StepStatus,
+};
+use dotfilesync_protocol::ApprovalGrant;
 use dotfilesync_protocol::{
-    ErrorCode, JobError, JobErrorCode, JobKind, JobOutput, JobSnapshot, JobSpec, JobStatus,
-    ProgressEvent, ProtocolError,
+    paths::ensure_private_dir, ErrorCode, JobError, JobErrorCode, JobKind, JobOutput, JobSnapshot,
+    JobSpec, JobStatus, ProgressEvent, ProtocolError, RunSummary, RunView, RunViewStatus,
 };
 
+use crate::approval::{
+    ApprovalError, ApprovalStore, ApprovalToken, Plan as ApprovalPlan, APPROVAL_TTL_MS,
+};
 use crate::fsutil::{now_ms, random_hex};
 use crate::journal::{Journal, JournalEvent, RecoveredJob};
 use crate::locks::{LockMode, ResourceKey, ResourceLocks};
 use crate::log::Logger;
+use crate::plans::{self, PlanStore, RunIndex, StoredPlan};
 
 /// Progress events retained per job.
 pub const MAX_EVENTS_PER_JOB: usize = 256;
@@ -196,6 +204,27 @@ struct Registry {
     order: VecDeque<String>,
 }
 
+enum Work {
+    Spec(JobSpec),
+    Plan {
+        input: PlanInput,
+        owner_uid: u32,
+    },
+    Apply {
+        plan: Plan,
+        input: PlanInput,
+        allow_sudo: bool,
+        /// `Some` resumes the journal in this directory instead of starting a run.
+        resume_dir: Option<PathBuf>,
+    },
+}
+
+pub struct JobPaths {
+    pub runs_dir: PathBuf,
+    pub backups_dir: PathBuf,
+    pub owner_uid: u32,
+}
+
 pub struct JobManager {
     registry: Mutex<Registry>,
     journal: Arc<Journal>,
@@ -204,6 +233,11 @@ pub struct JobManager {
     brew_bin: Option<PathBuf>,
     limits: JobLimits,
     accepting: AtomicBool,
+    plans: PlanStore,
+    approvals: ApprovalStore,
+    runs: RunIndex,
+    runs_dir: PathBuf,
+    backups_dir: PathBuf,
 }
 
 fn not_found(id: &str) -> ProtocolError {
@@ -272,6 +306,7 @@ impl JobManager {
         brew_bin: Option<PathBuf>,
         limits: JobLimits,
         recovered: &[RecoveredJob],
+        paths: JobPaths,
     ) -> Arc<Self> {
         let mut registry = Registry {
             jobs: HashMap::new(),
@@ -285,6 +320,8 @@ impl JobManager {
                 .jobs
                 .insert(r.job_id.clone(), Arc::new(Job::recovered(r)));
         }
+        let plans = PlanStore::new();
+        let runs = RunIndex::recover(&paths.runs_dir, Arc::clone(&log), &plans, paths.owner_uid);
         Arc::new(Self {
             registry: Mutex::new(registry),
             journal,
@@ -293,6 +330,11 @@ impl JobManager {
             brew_bin,
             limits,
             accepting: AtomicBool::new(true),
+            plans,
+            approvals: ApprovalStore::new(),
+            runs,
+            runs_dir: paths.runs_dir,
+            backups_dir: paths.backups_dir,
         })
     }
 
@@ -328,18 +370,165 @@ impl JobManager {
     }
 
     pub fn start(self: &Arc<Self>, spec: JobSpec) -> Result<JobSnapshot, ProtocolError> {
+        validate_spec(&spec)?;
+        let kind = spec.kind();
+        self.spawn(kind, Work::Spec(spec))
+    }
+
+    pub fn start_plan(
+        self: &Arc<Self>,
+        input: PlanInput,
+        owner_uid: u32,
+    ) -> Result<JobSnapshot, ProtocolError> {
+        validate_plan_input(&input)?;
+        self.spawn(JobKind::Plan, Work::Plan { input, owner_uid })
+    }
+
+    pub fn approve(
+        &self,
+        plan_id: &str,
+        digest: &str,
+        approver_uid: u32,
+    ) -> Result<ApprovalGrant, ProtocolError> {
+        validate_token_id("plan_id", plan_id)?;
+        let stored = self
+            .plans
+            .get(plan_id)
+            .ok_or_else(|| plan_not_found(plan_id))?;
+        if digest != stored.plan.digest() {
+            return Err(approval_rejected(ApprovalError::PlanMismatch));
+        }
+        let binding = approval_binding(&stored);
+        let now = now_ms();
+        let token = self
+            .approvals
+            .issue(&binding, approver_uid, now, APPROVAL_TTL_MS)
+            .map_err(approval_rejected)?;
+        let expires_at_ms = now.saturating_add(APPROVAL_TTL_MS);
+        self.log.info(&format!(
+            "plan {plan_id} approved uid={approver_uid} expires_at_ms={expires_at_ms}"
+        ));
+        Ok(ApprovalGrant {
+            token: token.expose().to_string(),
+            expires_at_ms,
+        })
+    }
+
+    pub fn apply(
+        self: &Arc<Self>,
+        plan_id: &str,
+        token: &str,
+        allow_sudo: bool,
+        caller_uid: u32,
+    ) -> Result<JobSnapshot, ProtocolError> {
+        validate_token_id("plan_id", plan_id)?;
+        validate_token(token)?;
+        let stored = self
+            .plans
+            .get(plan_id)
+            .ok_or_else(|| plan_not_found(plan_id))?;
+        // Re-observe under the caller's request before redeeming. The worker checks again
+        // after it holds the exclusive locks.
+        let current = self.observe_fingerprint(&stored.input)?;
+        self.approvals
+            .redeem(
+                &ApprovalToken::from_client(token),
+                &approval_binding(&stored),
+                caller_uid,
+                &current,
+                now_ms(),
+            )
+            .map_err(approval_rejected)?;
+        self.log
+            .info(&format!("plan {plan_id} approval redeemed for apply"));
+        self.spawn(
+            JobKind::Apply,
+            Work::Apply {
+                plan: stored.plan,
+                input: stored.input,
+                allow_sudo,
+                resume_dir: None,
+            },
+        )
+    }
+
+    pub fn resume(
+        self: &Arc<Self>,
+        run_id: &str,
+        token: &str,
+        allow_sudo: bool,
+        caller_uid: u32,
+    ) -> Result<JobSnapshot, ProtocolError> {
+        validate_token_id("run_id", run_id)?;
+        validate_token(token)?;
+        let view = self.runs.get(run_id)?;
+        if view.status == RunViewStatus::Running || self.runs.is_active(run_id) {
+            return Err(ProtocolError::new(
+                ErrorCode::Busy,
+                format!("run '{run_id}' is already in progress"),
+            ));
+        }
+        if view.status == RunViewStatus::Succeeded {
+            return Err(invalid(format!("run '{run_id}' already completed")));
+        }
+        let stored = self
+            .plans
+            .get(&view.plan_id)
+            .ok_or_else(|| plan_not_found(&view.plan_id))?;
+        if stored.plan.digest() != view.plan_digest {
+            return Err(approval_rejected(ApprovalError::PlanMismatch));
+        }
+        // A partial apply has already changed the machine, so resume is bound to the
+        // fingerprint captured when the plan was approved, not a fresh observation.
+        self.approvals
+            .redeem(
+                &ApprovalToken::from_client(token),
+                &approval_binding(&stored),
+                caller_uid,
+                &stored.plan.state_fingerprint,
+                now_ms(),
+            )
+            .map_err(approval_rejected)?;
+        let dir = self.runs.dir_for_run(run_id).ok_or_else(|| {
+            ProtocolError::new(
+                ErrorCode::PlanNotFound,
+                format!("no run with id '{run_id}'"),
+            )
+        })?;
+        self.log
+            .info(&format!("run {run_id} approval redeemed for resume"));
+        self.spawn(
+            JobKind::Apply,
+            Work::Apply {
+                plan: stored.plan,
+                input: stored.input,
+                allow_sudo,
+                resume_dir: Some(dir),
+            },
+        )
+    }
+
+    pub fn runs(&self) -> Vec<RunSummary> {
+        self.runs.list()
+    }
+
+    pub fn run_status(&self, run_id: &str) -> Result<RunView, ProtocolError> {
+        validate_token_id("run_id", run_id)?;
+        self.runs.get(run_id)
+    }
+
+    fn spawn(self: &Arc<Self>, kind: JobKind, work: Work) -> Result<JobSnapshot, ProtocolError> {
         if !self.accepting.load(Ordering::SeqCst) {
             return Err(ProtocolError::new(
                 ErrorCode::ShuttingDown,
                 "daemon is shutting down",
             ));
         }
-        validate_spec(&spec)?;
         let id = format!(
             "j-{}",
             random_hex(8).map_err(|e| ProtocolError::new(ErrorCode::Internal, e.to_string()))?
         );
-        let job = Arc::new(Job::new(id.clone(), spec.kind()));
+        let job = Arc::new(Job::new(id.clone(), kind));
         {
             let mut reg = self.reg();
             let active = reg
@@ -371,7 +560,7 @@ impl JobManager {
         let worker_job = Arc::clone(&job);
         let spawned = std::thread::Builder::new()
             .name(format!("job-{id}"))
-            .spawn(move || mgr.run_job(&worker_job, spec));
+            .spawn(move || mgr.run_job(&worker_job, work));
         if let Err(e) = spawned {
             self.complete(
                 &job,
@@ -425,7 +614,31 @@ impl JobManager {
         ));
     }
 
-    fn run_job(&self, job: &Arc<Job>, spec: JobSpec) {
+    fn run_job(&self, job: &Arc<Job>, work: Work) {
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match work {
+            Work::Spec(spec) => self.run_spec(job, spec),
+            Work::Plan { input, owner_uid } => self.run_plan_job(job, input, owner_uid),
+            Work::Apply {
+                plan,
+                input,
+                allow_sudo,
+                resume_dir,
+            } => self.run_apply_job(job, plan, input, allow_sudo, resume_dir),
+        }));
+        if panicked.is_err() && !job.snapshot().status.is_terminal() {
+            self.complete(
+                job,
+                JobStatus::Failed,
+                None,
+                Some(JobError {
+                    code: JobErrorCode::Internal,
+                    message: "job worker panicked".into(),
+                }),
+            );
+        }
+    }
+
+    fn run_spec(&self, job: &Arc<Job>, spec: JobSpec) {
         let cancel = Arc::clone(&job.cancel);
         let is_cancelled = move || cancel.load(Ordering::SeqCst);
 
@@ -439,43 +652,254 @@ impl JobManager {
             }
         };
 
-        let mut runner = RealCommandRunner::new(self.limits.command_timeout)
-            .with_cancellation(Arc::clone(&job.cancel));
-        if let Some(bin) = &self.brew_bin {
-            runner = runner.with_brew_binary(bin.clone());
-        }
-
+        let runner = self.runner(Some(Arc::clone(&job.cancel)));
         let progress_job = Arc::clone(job);
         let mut progress = move |stage: OpStage| {
-            let stage_name = serde_json::to_value(stage)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_string))
-                .unwrap_or_default();
-            progress_job.push_event(&stage_name, stage.describe());
+            progress_job.push_event(&stage_name(stage), stage.describe());
         };
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match &spec {
+        let result = match &spec {
             JobSpec::Scan(input) => run_scan(input, &runner, &mut progress, &is_cancelled)
                 .map(|report| JobOutput::Scan { report }),
             JobSpec::Status(input) => run_status(input, &runner, &mut progress, &is_cancelled)
                 .map(|report| JobOutput::Status { report }),
-        }));
+        };
+        drop(guard);
+        self.finish_op(job, result, &is_cancelled);
+    }
+
+    fn run_plan_job(&self, job: &Arc<Job>, input: PlanInput, owner_uid: u32) {
+        let cancel = Arc::clone(&job.cancel);
+        let is_cancelled = move || cancel.load(Ordering::SeqCst);
+        job.set_status(JobStatus::Running);
+        job.push_event("acquiring_locks", "Waiting for resource locks");
+        let reqs = vec![
+            (ResourceKey::Homebrew, LockMode::Shared),
+            (
+                ResourceKey::Manifest(input.manifest.clone()),
+                LockMode::Shared,
+            ),
+        ];
+        let guard = match self.locks.acquire(&reqs, &is_cancelled) {
+            Ok(g) => g,
+            Err(_) => {
+                self.complete(job, JobStatus::Cancelled, None, Some(cancelled_error()));
+                return;
+            }
+        };
+        let runner = self.runner(Some(Arc::clone(&job.cancel)));
+        let progress_job = Arc::clone(job);
+        let mut progress = move |stage: OpStage| {
+            progress_job.push_event(&stage_name(stage), stage.describe());
+        };
+        let result = run_plan(
+            &input,
+            &runner,
+            &current_hostname(),
+            &mut progress,
+            &is_cancelled,
+        )
+        .map(|plan| {
+            let plan_id = plan.plan_id();
+            self.plans.insert(StoredPlan {
+                plan: plan.clone(),
+                input: input.clone(),
+                owner_uid,
+            });
+            JobOutput::Plan { plan, plan_id }
+        });
+        drop(guard);
+        self.finish_op(job, result, &is_cancelled);
+    }
+
+    fn run_apply_job(
+        &self,
+        job: &Arc<Job>,
+        plan: Plan,
+        input: PlanInput,
+        allow_sudo: bool,
+        resume_dir: Option<PathBuf>,
+    ) {
+        let cancel = Arc::clone(&job.cancel);
+        let is_cancelled = move || cancel.load(Ordering::SeqCst);
+        job.set_status(JobStatus::Running);
+        job.push_event("acquiring_locks", "Waiting for resource locks");
+        let reqs = vec![
+            (ResourceKey::Homebrew, LockMode::Exclusive),
+            (ResourceKey::Home(plan.home.clone()), LockMode::Exclusive),
+        ];
+        let guard = match self.locks.acquire(&reqs, &is_cancelled) {
+            Ok(g) => g,
+            Err(_) => {
+                self.complete(job, JobStatus::Cancelled, None, Some(cancelled_error()));
+                return;
+            }
+        };
+
+        if resume_dir.is_none() {
+            match self.observe_fingerprint(&input) {
+                Ok(current) if current == plan.state_fingerprint => {}
+                Ok(_) => {
+                    drop(guard);
+                    self.complete(
+                        job,
+                        JobStatus::Failed,
+                        None,
+                        Some(JobError {
+                            code: JobErrorCode::Internal,
+                            message:
+                                "observed state changed after approval; re-plan and approve again"
+                                    .into(),
+                        }),
+                    );
+                    return;
+                }
+                Err(error) => {
+                    drop(guard);
+                    self.complete(
+                        job,
+                        JobStatus::Failed,
+                        None,
+                        Some(JobError {
+                            code: JobErrorCode::Internal,
+                            message: error.message,
+                        }),
+                    );
+                    return;
+                }
+            }
+        }
+
+        let run_dir = if let Some(dir) = resume_dir.clone() {
+            if let Some(run_id) = plans::read_run_id(&dir) {
+                self.runs.attach_job(&run_id, &job.id);
+            }
+            dir
+        } else {
+            let dir = self.runs_dir.join(format!("pending-{}", job.id));
+            if let Err(error) = ensure_private_dir(&dir) {
+                drop(guard);
+                self.complete(
+                    job,
+                    JobStatus::Failed,
+                    None,
+                    Some(JobError {
+                        code: JobErrorCode::Internal,
+                        message: error.to_string(),
+                    }),
+                );
+                return;
+            }
+            self.runs.begin(&job.id, &dir, &plan, &input);
+            dir
+        };
+
+        let runner = self.runner(Some(Arc::clone(&job.cancel)));
+        let ctx = ApplyContext {
+            runner: &runner,
+            backup_root: self.backups_dir.clone(),
+            run_dir: run_dir.clone(),
+            allow_sudo,
+            now: &now_ms,
+        };
+        let progress_job = Arc::clone(job);
+        let runs = &self.runs;
+        let progress_dir = run_dir.clone();
+        let mut progress = |record: &StepRecord| {
+            if let Some(run_id) = plans::read_run_id(&progress_dir) {
+                runs.note_run_id(&progress_job.id, &run_id);
+            }
+            let detail = record.error.clone().unwrap_or_default();
+            progress_job.push_event(
+                step_stage(record.status),
+                &format!("{} {detail}", record.action_id),
+            );
+        };
+
+        let result = if let Some(dir) = &resume_dir {
+            resume_run(dir, &plan, &ctx, &mut progress, &is_cancelled)
+        } else {
+            apply_plan(&plan, &ctx, &mut progress, &is_cancelled)
+        };
         drop(guard);
 
+        if let Some(run_id) = plans::read_run_id(&run_dir) {
+            self.runs.note_run_id(&job.id, &run_id);
+        }
         match result {
-            // A cancel that raced with completion still wins: never report partial work after
-            // the user asked to stop.
-            Ok(Ok(_)) if is_cancelled() => {
+            Ok(journal) if is_cancelled() => {
+                self.runs
+                    .finish(&job.id, RunViewStatus::Cancelled, Some(&journal.run_id));
+                self.complete(job, JobStatus::Cancelled, None, Some(cancelled_error()));
+            }
+            Ok(journal) => {
+                self.runs
+                    .finish(&job.id, RunViewStatus::Succeeded, Some(&journal.run_id));
+                job.push_event("done", "Completed");
+                self.complete(
+                    job,
+                    JobStatus::Succeeded,
+                    Some(JobOutput::Apply { journal }),
+                    None,
+                );
+            }
+            Err(ApplyError::Cancelled { journal }) => {
+                self.runs
+                    .finish(&job.id, RunViewStatus::Cancelled, Some(&journal.run_id));
+                self.complete(job, JobStatus::Cancelled, None, Some(cancelled_error()));
+            }
+            Err(ApplyError::StepFailed {
+                action_id,
+                message,
+                journal,
+            }) => {
+                self.runs
+                    .finish(&job.id, RunViewStatus::Failed, Some(&journal.run_id));
+                self.complete(
+                    job,
+                    JobStatus::Failed,
+                    None,
+                    Some(JobError {
+                        code: JobErrorCode::Internal,
+                        message: format!("step {action_id} failed: {message}"),
+                    }),
+                );
+            }
+            Err(error) => {
+                let run_id = plans::read_run_id(&run_dir);
+                self.runs
+                    .finish(&job.id, RunViewStatus::Failed, run_id.as_deref());
+                self.complete(
+                    job,
+                    JobStatus::Failed,
+                    None,
+                    Some(JobError {
+                        code: JobErrorCode::Internal,
+                        message: error.to_string(),
+                    }),
+                );
+            }
+        }
+    }
+
+    fn finish_op(
+        &self,
+        job: &Job,
+        result: Result<JobOutput, OpError>,
+        is_cancelled: &dyn Fn() -> bool,
+    ) {
+        match result {
+            Ok(_) if is_cancelled() => {
                 self.complete(job, JobStatus::Cancelled, None, Some(cancelled_error()))
             }
-            Ok(Ok(output)) => {
+            Ok(output) => {
                 job.push_event("done", "Completed");
                 self.complete(job, JobStatus::Succeeded, Some(output), None)
             }
-            Ok(Err(OpError::Cancelled)) => {
+            Err(OpError::Cancelled) => {
                 self.complete(job, JobStatus::Cancelled, None, Some(cancelled_error()))
             }
-            Ok(Err(e @ OpError::Manifest { .. })) => self.complete(
+            Err(e @ OpError::Manifest { .. }) => self.complete(
                 job,
                 JobStatus::Failed,
                 None,
@@ -484,16 +908,34 @@ impl JobManager {
                     message: e.to_string(),
                 }),
             ),
-            Err(_) => self.complete(
+            Err(error) => self.complete(
                 job,
                 JobStatus::Failed,
                 None,
                 Some(JobError {
                     code: JobErrorCode::Internal,
-                    message: "job worker panicked".into(),
+                    message: error.to_string(),
                 }),
             ),
         }
+    }
+
+    fn runner(&self, cancel: Option<Arc<AtomicBool>>) -> RealCommandRunner {
+        let mut runner = RealCommandRunner::new(self.limits.command_timeout);
+        if let Some(cancel) = cancel {
+            runner = runner.with_cancellation(cancel);
+        }
+        if let Some(bin) = &self.brew_bin {
+            runner = runner.with_brew_binary(bin.clone());
+        }
+        runner
+    }
+
+    fn observe_fingerprint(&self, input: &PlanInput) -> Result<String, ProtocolError> {
+        let runner = self.runner(None);
+        let plan = run_plan(input, &runner, &current_hostname(), &mut |_| {}, &|| false)
+            .map_err(op_to_protocol)?;
+        Ok(plan.state_fingerprint)
     }
 
     pub fn cancel(&self, id: &str) -> Result<JobSnapshot, ProtocolError> {
@@ -558,6 +1000,97 @@ impl JobManager {
             .iter()
             .filter(|j| !j.lock().status.is_terminal())
             .count()
+    }
+}
+
+fn stage_name(stage: OpStage) -> String {
+    serde_json::to_value(stage)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+fn step_stage(status: StepStatus) -> &'static str {
+    match status {
+        StepStatus::Pending => "pending",
+        StepStatus::Running => "running",
+        StepStatus::Done => "done",
+        StepStatus::Failed => "failed",
+        StepStatus::Skipped => "skipped",
+    }
+}
+
+fn validate_plan_input(input: &PlanInput) -> Result<(), ProtocolError> {
+    validate_path("manifest", &input.manifest)?;
+    validate_path("home", &input.home)?;
+    if let Some(repo) = &input.repo_root {
+        validate_path("repo_root", repo)?;
+    }
+    if let Some(profile) = &input.profile {
+        if profile.is_empty()
+            || profile.len() > 128
+            || profile
+                .chars()
+                .any(|c| c.is_control() || c == '/' || c == '\\')
+        {
+            return Err(invalid("profile name is invalid"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_token_id(name: &str, id: &str) -> Result<(), ProtocolError> {
+    if id.is_empty() || id.len() > 80 || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(invalid(format!(
+            "'{name}' must be 1..=80 ascii letters, digits, or '-'"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_token(token: &str) -> Result<(), ProtocolError> {
+    if token.is_empty() || token.len() > 256 || token.chars().any(|c| c.is_control()) {
+        return Err(invalid("approval token is invalid"));
+    }
+    Ok(())
+}
+
+fn approval_binding(stored: &StoredPlan) -> ApprovalPlan {
+    ApprovalPlan {
+        plan_id: stored.plan.plan_id(),
+        resource: format!("home:{}", stored.plan.home.display()),
+        content_digest: stored.plan.digest(),
+        state_fingerprint: stored.plan.state_fingerprint.clone(),
+        owner_uid: stored.owner_uid,
+    }
+}
+
+fn approval_rejected(err: ApprovalError) -> ProtocolError {
+    let reason = match err {
+        ApprovalError::UnknownToken => "unknown_token",
+        ApprovalError::Expired => "expired",
+        ApprovalError::AlreadyUsed => "already_used",
+        ApprovalError::PlanMismatch => "plan_mismatch",
+        ApprovalError::StateChanged => "state_changed",
+        ApprovalError::WrongOwner => "wrong_owner",
+        ApprovalError::Entropy => "entropy",
+    };
+    ProtocolError::new(ErrorCode::ApprovalRejected, err.to_string())
+        .with_details(serde_json::json!({ "reason": reason }))
+}
+
+fn plan_not_found(id: &str) -> ProtocolError {
+    ProtocolError::new(ErrorCode::PlanNotFound, format!("no plan with id '{id}'"))
+}
+
+fn op_to_protocol(error: OpError) -> ProtocolError {
+    match error {
+        OpError::Cancelled => ProtocolError::new(ErrorCode::Internal, "planning was cancelled"),
+        error @ OpError::Manifest { .. } => {
+            ProtocolError::new(ErrorCode::InvalidParams, error.to_string())
+        }
+        OpError::Failed(message) => ProtocolError::new(ErrorCode::Internal, message),
     }
 }
 

@@ -1,8 +1,8 @@
 //! Shared plan/approval contract for future system-changing operations (#4 and later).
 //!
-//! A [`Plan`] is reviewable data: what will change, on which resource, computed from which
-//! observed state. Approving it yields a single-use [`ApprovalToken`] bound to:
-//! - the plan's exact content (digest),
+//! A [`Plan`] binds an approval to a core plan. Approving it yields a single-use
+//! [`ApprovalToken`] bound to:
+//! - the core plan digest (`dotfilesync_core::Plan::digest`),
 //! - the owning user (UID from peer credentials, never from a request field),
 //! - the observed-state fingerprint the plan was computed from,
 //! - an expiry time.
@@ -22,32 +22,28 @@ use thiserror::Error;
 
 use crate::fsutil::random_hex;
 
-/// Descriptive, non-executable plan step.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlannedAction {
-    /// Typed action identifier, e.g. "brew.install" (future). Never a shell command.
-    pub action: String,
-    pub target: String,
-    pub summary: String,
-    pub reversible: bool,
-}
+/// How long an approval stays redeemable.
+pub const APPROVAL_TTL_MS: u64 = 10 * 60 * 1000;
 
+/// Approval binding for a core plan.
+///
+/// `content_digest` is [`dotfilesync_core::Plan::digest`], not a hash of this struct. The
+/// state fingerprint and owner are checked on their own at redeem time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plan {
     pub plan_id: String,
-    /// The resource the plan mutates; used for lock scoping.
+    /// Resource key used to supersede older approvals (the home the plan mutates).
     pub resource: String,
-    pub actions: Vec<PlannedAction>,
+    /// `dotfilesync_core::Plan::digest()`.
+    pub content_digest: String,
     /// Fingerprint of the observed state the plan was computed from.
     pub state_fingerprint: String,
     pub owner_uid: u32,
 }
 
 impl Plan {
-    /// SHA-256 over the canonical JSON encoding of the whole plan.
     pub fn digest(&self) -> String {
-        let canonical = serde_json::to_vec(self).expect("plan serializes");
-        hex::encode(Sha256::digest(canonical))
+        self.content_digest.clone()
     }
 }
 
