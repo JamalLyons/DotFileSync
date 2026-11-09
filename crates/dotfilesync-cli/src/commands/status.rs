@@ -68,6 +68,7 @@ pub fn execute(args: StatusArgs, data_dir: Option<&Path>) -> Result<()> {
                 manifest: args.manifest.clone(),
                 home,
                 repo_root: args.repo_root.clone(),
+                profile: None,
             };
             match run_status(&input, &runner, &mut |_| {}, &|| false) {
                 Ok(r) => r,
@@ -86,6 +87,7 @@ pub fn execute(args: StatusArgs, data_dir: Option<&Path>) -> Result<()> {
                 manifest: mode::absolute(&args.manifest)?,
                 home: mode::absolute(&home)?,
                 repo_root: args.repo_root.as_deref().map(mode::absolute).transpose()?,
+                profile: None,
             };
             match remote::run_job(&mut client, JobSpec::Status(input), args.detach, args.json)? {
                 Remote::Detached(job) => {

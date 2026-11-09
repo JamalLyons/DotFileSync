@@ -1,4 +1,5 @@
 pub mod model;
+pub mod profile;
 pub mod validation;
 
 use std::ffi::OsString;
@@ -9,6 +10,10 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub use model::*;
+pub use profile::{
+    current_hostname, current_os, normalize_hostname, resolve_profile, ProfileSelection,
+    ResolvedManifest,
+};
 pub use validation::*;
 
 #[derive(Debug, Error)]
@@ -28,6 +33,12 @@ pub enum ManifestError {
 
     #[error("Manifest validation failed with {0} errors: {1}")]
     Validation(usize, String),
+
+    #[error("Unknown profile '{name}'")]
+    UnknownProfile { name: String },
+
+    #[error("Profile cycle detected: {cycle}")]
+    ProfileCycle { cycle: String },
 }
 
 pub fn parse_manifest(content: &str) -> Result<Manifest, ManifestError> {

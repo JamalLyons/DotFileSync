@@ -437,6 +437,7 @@ mod tests {
                 manifest: PathBuf::from("/tmp/m.toml"),
                 home: PathBuf::from("/tmp/home"),
                 repo_root: None,
+                profile: None,
             }),
         };
         let frame = req.clone().into_frame(7);

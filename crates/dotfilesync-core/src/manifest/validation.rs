@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use std::path::{Component, Path};
 use thiserror::Error;
 
-use super::model::{Manifest, CURRENT_SCHEMA_VERSION};
+use super::model::{Manifest, TrackedFile, CURRENT_SCHEMA_VERSION};
+use super::profile::profile_validation_errors;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ValidationError {
@@ -29,6 +30,15 @@ pub enum ValidationError {
 
     #[error("Invalid exclusion pattern '{pattern}': {reason}")]
     InvalidExclusionPattern { pattern: String, reason: String },
+
+    #[error("Unknown profile '{name}' referenced from {context}")]
+    UnknownProfile { name: String, context: String },
+
+    #[error("Profile cycle detected: {cycle}")]
+    ProfileCycle { cycle: String },
+
+    #[error("Invalid OS condition '{value}'")]
+    InvalidOsCondition { value: String },
 }
 
 const SENSITIVE_PATH_PATTERNS: &[&str] = &[
@@ -47,16 +57,40 @@ const SENSITIVE_PATH_PATTERNS: &[&str] = &[
 pub fn validate_manifest(manifest: &Manifest) -> Result<(), Vec<ValidationError>> {
     let mut errors = Vec::new();
 
-    if manifest.schema_version != CURRENT_SCHEMA_VERSION {
+    if manifest.schema_version != 1 && manifest.schema_version != CURRENT_SCHEMA_VERSION {
         errors.push(ValidationError::UnsupportedSchemaVersion {
             version: manifest.schema_version,
             expected: CURRENT_SCHEMA_VERSION,
         });
     }
 
+    validate_files(&manifest.files, &mut errors);
+    for profile in manifest.profiles.values() {
+        validate_files(&profile.files, &mut errors);
+    }
+    errors.extend(profile_validation_errors(manifest));
+
+    // Validate exclusion glob patterns
+    for pattern in &manifest.exclusions.patterns {
+        if let Err(e) = glob::Pattern::new(pattern) {
+            errors.push(ValidationError::InvalidExclusionPattern {
+                pattern: pattern.clone(),
+                reason: e.to_string(),
+            });
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+fn validate_files(files: &[TrackedFile], errors: &mut Vec<ValidationError>) {
     let mut seen_targets = HashSet::new();
 
-    for file in &manifest.files {
+    for file in files {
         if file.source.trim().is_empty() {
             errors.push(ValidationError::EmptySourcePath {
                 target: file.target.clone(),
@@ -73,7 +107,6 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), Vec<ValidationError>
             });
         }
 
-        // Check for directory traversal in source
         let source_path = Path::new(&file.source);
         if source_path
             .components()
@@ -84,7 +117,6 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), Vec<ValidationError>
             });
         }
 
-        // Check for duplicate targets
         let normalized_target = file.target.trim().to_string();
         if !seen_targets.insert(normalized_target) {
             errors.push(ValidationError::DuplicateTargetPath {
@@ -92,7 +124,6 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), Vec<ValidationError>
             });
         }
 
-        // Check sensitive credential locations
         for sensitive in SENSITIVE_PATH_PATTERNS {
             if file.target.contains(sensitive) || file.source.contains(sensitive) {
                 errors.push(ValidationError::SensitiveCredentialPath {
@@ -101,21 +132,5 @@ pub fn validate_manifest(manifest: &Manifest) -> Result<(), Vec<ValidationError>
                 break;
             }
         }
-    }
-
-    // Validate exclusion glob patterns
-    for pattern in &manifest.exclusions.patterns {
-        if let Err(e) = glob::Pattern::new(pattern) {
-            errors.push(ValidationError::InvalidExclusionPattern {
-                pattern: pattern.clone(),
-                reason: e.to_string(),
-            });
-        }
-    }
-
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
     }
 }

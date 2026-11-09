@@ -50,6 +50,9 @@ pub fn execute(args: ImportArgs) -> Result<()> {
             files: Vec::new(),
             exclusions: Default::default(),
             overrides: Vec::new(),
+            select: Default::default(),
+            profiles: Default::default(),
+            setup: Default::default(),
         };
 
         let toml_str = serialize_manifest(&manifest)?;

@@ -13,8 +13,13 @@ use crate::brew::{discover_homebrew, CommandRunner};
 use crate::comparison::{compare_status, StatusReport};
 use crate::config::ConfigInspector;
 use crate::diagnostic::Diagnostic;
-use crate::manifest::{load_manifest, ManifestError};
+use crate::manifest::{
+    current_hostname, current_os, load_manifest, resolve_profile, Manifest, ManifestError,
+    ProfileSelection, ResolvedManifest,
+};
 use crate::scan::ScanReport;
+
+pub use crate::plan::run_plan;
 
 /// Stages reported through the progress callback, in execution order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +29,7 @@ pub enum OpStage {
     DiscoveringHomebrew,
     InspectingConfigs,
     Comparing,
+    Planning,
 }
 
 impl OpStage {
@@ -33,6 +39,7 @@ impl OpStage {
             OpStage::DiscoveringHomebrew => "Discovering installed Homebrew packages",
             OpStage::InspectingConfigs => "Inspecting tracked configuration files",
             OpStage::Comparing => "Comparing desired and observed state",
+            OpStage::Planning => "Planning changes",
         }
     }
 }
@@ -48,6 +55,9 @@ pub enum OpError {
         #[source]
         source: ManifestError,
     },
+
+    #[error("{0}")]
+    Failed(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +67,9 @@ pub struct ScanInput {
     pub home: PathBuf,
     /// Defaults to the manifest's parent directory, or `.` if it has none.
     pub repo_root: Option<PathBuf>,
+    /// `None` selects a profile automatically (`[select]`, otherwise the base layer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,6 +77,9 @@ pub struct StatusInput {
     pub manifest: PathBuf,
     pub home: PathBuf,
     pub repo_root: Option<PathBuf>,
+    /// `None` selects a profile automatically (`[select]`, otherwise the base layer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 fn default_repo_root(manifest: &Path, repo_root: Option<&Path>) -> PathBuf {
@@ -74,6 +90,24 @@ fn default_repo_root(manifest: &Path, repo_root: Option<&Path>) -> PathBuf {
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| PathBuf::from("."))
     })
+}
+
+fn profile_selection(profile: &Option<String>) -> ProfileSelection {
+    match profile {
+        Some(name) => ProfileSelection::Explicit(name.clone()),
+        None => ProfileSelection::Auto,
+    }
+}
+
+fn materialized_manifest(original: &Manifest, resolved: &ResolvedManifest) -> Manifest {
+    let mut manifest = Manifest::new(original.schema_version);
+    manifest.metadata = original.metadata.clone();
+    manifest.package_managers.homebrew = resolved.homebrew.clone();
+    manifest.files = resolved.files.clone();
+    manifest.exclusions = resolved.exclusions.clone();
+    manifest.overrides = resolved.overrides.clone();
+    manifest.setup = resolved.setup.clone();
+    manifest
 }
 
 fn check(is_cancelled: &dyn Fn() -> bool) -> Result<(), OpError> {
@@ -109,14 +143,31 @@ pub fn run_scan(
                 Ok(manifest) => {
                     check(is_cancelled)?;
                     progress(OpStage::InspectingConfigs);
-                    let repo_root = default_repo_root(manifest_path, input.repo_root.as_deref());
-                    let inspector = ConfigInspector::new(
-                        &repo_root,
-                        &input.home,
-                        &manifest.exclusions,
-                        &manifest.overrides,
-                    );
-                    configs = inspector.inspect_files(&manifest.files);
+                    match resolve_profile(
+                        &manifest,
+                        &profile_selection(&input.profile),
+                        &current_hostname(),
+                        current_os(),
+                    ) {
+                        Ok(resolved) => {
+                            let repo_root =
+                                default_repo_root(manifest_path, input.repo_root.as_deref());
+                            let inspector = ConfigInspector::new(
+                                &repo_root,
+                                &input.home,
+                                &resolved.exclusions,
+                                &resolved.overrides,
+                            );
+                            configs = inspector.inspect_files(&resolved.files);
+                        }
+                        Err(error) => diagnostics.push(
+                            Diagnostic::error(format!(
+                                "Failed to resolve manifest profile at '{}'",
+                                manifest_path.display()
+                            ))
+                            .with_detail(error.to_string()),
+                        ),
+                    }
                 }
                 Err(e) => diagnostics.push(
                     Diagnostic::error(format!(
@@ -149,6 +200,17 @@ pub fn run_status(
         path: input.manifest.clone(),
         source,
     })?;
+    let resolved = resolve_profile(
+        &manifest,
+        &profile_selection(&input.profile),
+        &current_hostname(),
+        current_os(),
+    )
+    .map_err(|source| OpError::Manifest {
+        path: input.manifest.clone(),
+        source,
+    })?;
+    let manifest = materialized_manifest(&manifest, &resolved);
 
     check(is_cancelled)?;
     progress(OpStage::DiscoveringHomebrew);

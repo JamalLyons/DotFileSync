@@ -484,6 +484,15 @@ impl JobManager {
                     message: e.to_string(),
                 }),
             ),
+            Ok(Err(error)) => self.complete(
+                job,
+                JobStatus::Failed,
+                None,
+                Some(JobError {
+                    code: JobErrorCode::Internal,
+                    message: error.to_string(),
+                }),
+            ),
             Err(_) => self.complete(
                 job,
                 JobStatus::Failed,
